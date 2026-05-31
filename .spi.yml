@@ -1,0 +1,30 @@
+# Swift Package Index manifest.
+# https://swiftpackageindex.com/SwiftPackageIndex/SPIManifest
+#
+# SPI auto-discovers tagged releases and builds documentation for the
+# `documentation_targets` listed below. The hosted DocC archives are
+# served at:
+#
+#   https://swiftpackageindex.com/monagle-au/swift-backplane/<tag>/documentation/<target>
+#
+# Note on traits: SPI doesn't yet support per-build trait enablement, so
+# the trait-gated targets (BackplanePostgres, BackplaneOTel, BackplaneGCP,
+# BackplaneVault) are listed here for completeness — SPI will build them,
+# but with their traits disabled their `#if` blocks compile to empty
+# modules and the hosted docs show only the catalog articles, not the
+# symbol references. For full symbol-level docs of the trait-gated
+# targets, run
+# `swift package --traits <Trait> generate-documentation --target Backplane<Trait>`
+# locally. (BackplaneVault is partially trait-gated: the protocol surface
+# and PassthroughEncryption are visible without the KeyfileEncryption
+# trait; LocalKeyfileEncryption is gated.)
+version: 1
+builder:
+  configs:
+    - documentation_targets:
+        - Backplane
+        - BackplanePostgres
+        - BackplaneOTel
+        - BackplaneGCP
+        - BackplaneVault
+        - BackplaneMacros

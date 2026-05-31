@@ -1,0 +1,120 @@
+name: Release
+
+# Fires when a version tag is pushed. Re-runs the full trait matrix on
+# macOS and Linux as a release gate, then creates a GitHub Release with
+# the matching CHANGELOG.md section as the body.
+#
+# Tag format: vMAJOR.MINOR.PATCH (or pre-release suffixes like
+# v1.0.0-rc.1).
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test-macos:
+    name: Test (macOS) / ${{ matrix.label }}
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: no traits
+            traits: ""
+          - label: all traits
+            traits: "--traits Postgres,OTel,GCP"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Test
+        run: swift test -v ${{ matrix.traits }}
+
+  test-linux:
+    name: Test (Linux) / ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    container: swift:6.2-noble
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: no traits
+            traits: ""
+          - label: all traits
+            traits: "--traits Postgres,OTel,GCP"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Test
+        run: swift test -v ${{ matrix.traits }}
+
+  release:
+    name: Create GitHub Release
+    needs: [test-macos, test-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the full history so we can read CHANGELOG.md from the
+          # tagged commit.
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Strip the leading 'v' for matching the CHANGELOG section.
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"     >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Extract CHANGELOG section
+        id: notes
+        run: |
+          # Pull the section from the first "## [VERSION]" line up to
+          # (but not including) the next "## [" line. Falls back to a
+          # stub if the section is missing so the release still gets
+          # created.
+          if [ -f CHANGELOG.md ]; then
+            awk -v v="${{ steps.tag.outputs.version }}" '
+              $0 ~ "^## \\[" v "\\]" { found=1; print; next }
+              found && /^## \[/        { exit }
+              found                    { print }
+            ' CHANGELOG.md > release-notes.md
+          fi
+          if [ ! -s release-notes.md ]; then
+            echo "Release ${{ steps.tag.outputs.tag }}" > release-notes.md
+            echo "" >> release-notes.md
+            echo "_No matching CHANGELOG.md section found for ${{ steps.tag.outputs.version }}._" >> release-notes.md
+          fi
+          echo "--- release notes ---"
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Treat any tag containing a hyphen as a pre-release (rc, beta,
+          # alpha, …). Stable releases get marked latest.
+          PRERELEASE_FLAG=""
+          if [[ "${{ steps.tag.outputs.tag }}" == *-* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          else
+            PRERELEASE_FLAG="--latest"
+          fi
+          gh release create "${{ steps.tag.outputs.tag }}" \
+              --title "${{ steps.tag.outputs.tag }}" \
+              --notes-file release-notes.md \
+              $PRERELEASE_FLAG

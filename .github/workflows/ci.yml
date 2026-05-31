@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  # Only run CI on pull requests targeting main. Branch protection
+  # enforces that every change to main goes through a PR, so a
+  # `push: main` trigger here would just duplicate the PR run on
+  # the resulting merge commit. Tag pushes are handled by
+  # release.yml as the release gate.
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS / ${{ matrix.label }}
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: no traits
+            traits: ""
+          - label: all traits
+            traits: "--traits Postgres,OTel,GCP,KeyfileEncryption,Macros"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build
+        run: swift build -v ${{ matrix.traits }}
+
+      - name: Test
+        run: swift test -v ${{ matrix.traits }}
+
+  linux:
+    name: Linux / ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    container: swift:6.2-noble
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: no traits
+            traits: ""
+          - label: all traits
+            traits: "--traits Postgres,OTel,GCP,KeyfileEncryption,Macros"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build
+        run: swift build -v ${{ matrix.traits }}
+
+      - name: Test
+        run: swift test -v ${{ matrix.traits }}
+
+  docs:
+    name: DocC build
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build documentation (Backplane)
+        run: swift package generate-documentation --target Backplane
+
+      - name: Build documentation (BackplanePostgres)
+        run: swift package --traits Postgres generate-documentation --target BackplanePostgres
+
+      - name: Build documentation (BackplaneOTel)
+        run: swift package --traits OTel generate-documentation --target BackplaneOTel
+
+      - name: Build documentation (BackplaneGCP)
+        run: swift package --traits GCP generate-documentation --target BackplaneGCP
+
+      - name: Build documentation (BackplaneVault)
+        run: swift package --traits KeyfileEncryption generate-documentation --target BackplaneVault
+
+      - name: Build documentation (BackplaneMacros)
+        run: swift package --traits Macros generate-documentation --target BackplaneMacros
