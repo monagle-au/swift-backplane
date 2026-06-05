@@ -522,9 +522,9 @@ struct MyApp: BackplaneApplication {
 
             EntryDescriptor(
                 services.httpKey,
-                dependencies: [AnyServiceKey(keyPath: \.postgresKey)]
+                dependencies: [AnyServiceKey(keyPath: \.postgres)]
             ) { context in
-                let pg = try await context.requireService(\.postgresKey)
+                let pg = try await context.requireService(\.postgres)
                 return MyHTTPServer(database: pg.client)
             },
         ]

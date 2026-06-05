@@ -89,38 +89,62 @@ order, after CLI parsing, before the first `Logger` is built.
 ### Adding a service
 
 1. Extend `Services` with a computed property returning a typed
-   `ServiceKey<T>`:
+   `ServiceKey<T>`. No naming convention is imposed — name it for the
+   value, not `…Key`:
 
 ```swift
 extension Services {
-    public var databaseKey: ServiceKey<PostgresClient> {
+    public var database: ServiceKey<PostgresClient> {
         ServiceKey(id: "database")
     }
 }
 ```
 
-2. Return an `EntryDescriptor` from `services()`:
+2. Return an `EntryDescriptor` from `services()`. `PostgresClient` is a
+   passive value (no `start()`/`shutdown()` of its own), so register it
+   with the `passive:` initialiser — the graph wraps it in a
+   `PassiveService` for lifecycle and unwraps it on resolution, so the
+   wrapper never surfaces:
 
 ```swift
 static func services() -> [EntryDescriptor] {
     [
-        EntryDescriptor(Services().databaseKey) { context in
-            let client = try await PostgresClient(...)
-            return PassiveService(client)
+        EntryDescriptor(Services().database) { context in   // passive:
+            try await PostgresClient(...)
         }
     ]
 }
 ```
 
 3. Declare it as a `requiredService` on commands that need it and
-   resolve via `context.requireService(\.databaseKey)`:
+   resolve via `context.requireService(\.database)` — the resolved type
+   is `PostgresClient`, no `.inner`:
 
 ```swift
-var requiredServices: [PartialKeyPath<Services>] { [\.databaseKey] }
+var requiredServices: [PartialKeyPath<Services>] { [\.database] }
 
 func execute(with context: ServiceContext) async throws {
-    let db = try await context.requireService(\.databaseKey)
+    let db = try await context.requireService(\.database)
 }
+```
+
+A key's resolved `Value` need not equal the registered concrete type —
+it can be a **protocol**. Register a concrete passive value behind a
+protocol key with `passive:`, or project a concrete `ManagedService`
+onto a protocol key with `factory:as:`:
+
+```swift
+extension Services {
+    public var auditStore: ServiceKey<any AuditStore> { ServiceKey(id: "audit-store") }
+}
+
+// passive value behind a protocol key:
+EntryDescriptor(Services().auditStore) { _ in ClickHouseAuditStore(...) }
+
+// lifecycle service projected onto a protocol key:
+EntryDescriptor(Services().auditStore,
+    factory: { _ in ClickHouseAuditService(...) },   // a ManagedService
+    as: { $0 })                                      // -> any AuditStore
 ```
 
 ### Writing a command
@@ -137,7 +161,7 @@ struct MyApp: BackplaneApplication {
 struct ServeCommand: PersistentCommand {
     typealias App = MyApp
     static let configuration = CommandConfiguration(abstract: "Run the server")
-    var requiredServices: [PartialKeyPath<Services>] { [\.databaseKey] }
+    var requiredServices: [PartialKeyPath<Services>] { [\.database] }
 }
 ```
 
@@ -149,7 +173,7 @@ The `RootCommand` associated type is the outer `AsyncParsableCommand`.
 Each is opt-in via a Swift Package trait — consumers pay nothing
 for what they don't enable.
 
-- **`BackplanePostgres`** (`Postgres`) — `Services.postgresKey`,
+- **`BackplanePostgres`** (`Postgres`) — `Services.postgres`,
   `postgresEntryDescriptor()`, `PostgresMigrator`, config builder.
 - **`BackplaneOTel`** (`OTel`) — `BackplaneOTel.makeBootstrap(...)`,
   `OTelTracingOptions`, `OTelMetricsOptions`.

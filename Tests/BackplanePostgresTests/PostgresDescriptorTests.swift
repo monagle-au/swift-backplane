@@ -19,9 +19,9 @@ import Testing
 @Suite("BackplanePostgres — descriptor surface")
 struct PostgresDescriptorTests {
 
-    @Test("postgresKey carries the expected id")
+    @Test("postgres key carries the expected id")
     func keyShape() {
-        #expect(Services().postgresKey.id == "postgres")
+        #expect(Services().postgres.id == "postgres")
     }
 
     @Test("postgresEntryDescriptor() produces a descriptor whose factory throws when the graph has no config")
@@ -34,12 +34,12 @@ struct PostgresDescriptorTests {
         )
 
         await #expect(throws: (any Error).self) {
-            try await graph.boot(roots: [AnyServiceKey(Services().postgresKey)])
+            try await graph.boot(roots: [AnyServiceKey(Services().postgres)])
         }
 
         // Drill into the entry's state to confirm the failure is
         // recorded as a faulted .failed transition.
-        let state = graph.state(of: Services().postgresKey.id)
+        let state = graph.state(of: Services().postgres.id)
         if case .failed(let fault) = state {
             #expect(fault.errorType.contains("ServiceGraphError"),
                     "fault should reflect ServiceGraphError.missingConfigReader; got \(fault.errorType)")
@@ -58,7 +58,7 @@ struct PostgresDescriptorTests {
         // lives in Backplane's own graph tests.
         _ = postgresEntryDescriptor(
             subgroup: .integrations,
-            dependencies: [\.postgresKey]
+            dependencies: [\.postgres]
         )
     }
 }

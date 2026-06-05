@@ -31,7 +31,7 @@ import Synchronization
 /// dependent services with ``HotReloadable``.
 public final class BackplanePostgresService: ManagedService, @unchecked Sendable {
     /// The wrapped `PostgresClient`. Resolve the service via
-    /// ``postgresKey`` and access this property to drive queries.
+    /// ``Services/postgres`` and access this property to drive queries.
     ///
     /// Aliased to ``inner`` for consumers that prefer the Backplane-wide
     /// `.inner` convention used by ``LifecycleAdapter`` and
@@ -75,7 +75,7 @@ public final class BackplanePostgresService: ManagedService, @unchecked Sendable
     }
 }
 
-// MARK: - postgresKey
+// MARK: - postgres key
 
 extension Services {
     /// Service key for ``BackplanePostgresService``.
@@ -84,10 +84,10 @@ extension Services {
     /// command:
     ///
     /// ```swift
-    /// let pg = try await context.requireService(\.postgresKey)
+    /// let pg = try await context.requireService(\.postgres)
     /// let result = try await pg.client.query("SELECT 1")
     /// ```
-    public var postgresKey: ServiceKey<BackplanePostgresService> {
+    public var postgres: ServiceKey<BackplanePostgresService> {
         ServiceKey(id: "postgres")
     }
 }
@@ -127,7 +127,7 @@ public func postgresEntryDescriptor(
     dependencies: [PartialKeyPath<Services>] = []
 ) -> EntryDescriptor {
     EntryDescriptor(
-        \.postgresKey,
+        \.postgres,
         subgroup: subgroup,
         dependencies: dependencies
     ) { context in

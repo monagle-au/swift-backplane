@@ -98,7 +98,7 @@ public final class ServiceContext: Sendable {
     /// Keypath-flavoured synchronous resolve.
     ///
     /// ```swift
-    /// if let pg = context.service(\.postgresKey) { … }
+    /// if let pg = context.service(\.postgres) { … }
     /// ```
     ///
     /// `T` is inferred from the keypath's `Value` type.
@@ -111,7 +111,7 @@ public final class ServiceContext: Sendable {
     /// Keypath-flavoured async resolve.
     ///
     /// ```swift
-    /// let pg = try await context.requireService(\.postgresKey)
+    /// let pg = try await context.requireService(\.postgres)
     /// ```
     ///
     /// `T` is inferred from the keypath's `Value` type. Throwing

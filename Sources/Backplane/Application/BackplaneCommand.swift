@@ -44,10 +44,10 @@ private struct UncheckedSendableBox<T>: @unchecked Sendable {
 ///     typealias App = MyApp
 ///     static let configuration = CommandConfiguration(abstract: "Run migrations")
 ///
-///     var requiredServices: [PartialKeyPath<Services>] { [\.postgresKey] }
+///     var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
 ///
 ///     func execute(with context: ServiceContext) async throws {
-///         let db = try await context.requireService(\.postgresKey)
+///         let db = try await context.requireService(\.postgres)
 ///         try await runMigrations(db)
 ///     }
 /// }
@@ -59,7 +59,7 @@ public protocol BackplaneCommand: AsyncParsableCommand {
 
     /// The service keys whose transitive dependencies will be booted
     /// before the command runs. Declared as keypaths over the
-    /// ``Services`` namespace — `\.postgresKey`, `\.databaseKey`, etc.
+    /// ``Services`` namespace — `\.postgres`, `\.database`, etc.
     var requiredServices: [PartialKeyPath<Services>] { get }
 
     /// Called after all required services have been built and started.
@@ -231,10 +231,10 @@ public protocol PersistentCommand: BackplaneCommand {}
 /// struct Migrate: TaskCommand {
 ///     typealias App = MyApp
 ///     static let configuration = CommandConfiguration(abstract: "Run migrations")
-///     var requiredServices: [PartialKeyPath<Services>] { [\.postgresKey] }
+///     var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
 ///
 ///     func execute(with context: ServiceContext) async throws {
-///         let db = try await context.requireService(\.postgresKey)
+///         let db = try await context.requireService(\.postgres)
 ///         try await PostgresMigrator(client: db).migrate()
 ///     }
 /// }

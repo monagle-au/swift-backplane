@@ -70,7 +70,11 @@ package final class ServiceEntry: Sendable {
     package func currentHandle<T: Sendable>(_ type: T.Type) -> T? {
         _state.withLock { state in
             guard let active = state.active else { return nil }
-            return Self.isResolutionReady(state.lifecycleState) ? active.instance as? T : nil
+            guard Self.isResolutionReady(state.lifecycleState) else { return nil }
+            // Project the managed instance to the key's resolved value
+            // before casting. Identity for Form 1, unwrap for Form 2,
+            // upcast for Form 3 — see ``EntryDescriptor/project``.
+            return descriptor.project(active.instance) as? T
         }
     }
 

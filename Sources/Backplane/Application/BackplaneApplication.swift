@@ -23,7 +23,7 @@ import Configuration
 ///
 ///     static func services() -> [EntryDescriptor] {
 ///         [
-///             EntryDescriptor(databaseKey) { context in
+///             EntryDescriptor(Services().database) { context in
 ///                 PostgresService(logger: context.logger)
 ///             },
 ///         ]
