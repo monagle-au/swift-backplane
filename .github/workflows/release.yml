@@ -102,19 +102,35 @@ jobs:
           echo "--- release notes ---"
           cat release-notes.md
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          TAG="${{ steps.tag.outputs.tag }}"
           # Treat any tag containing a hyphen as a pre-release (rc, beta,
           # alpha, …). Stable releases get marked latest.
-          PRERELEASE_FLAG=""
-          if [[ "${{ steps.tag.outputs.tag }}" == *-* ]]; then
-            PRERELEASE_FLAG="--prerelease"
-          else
-            PRERELEASE_FLAG="--latest"
+          PRERELEASE=false
+          if [[ "$TAG" == *-* ]]; then
+            PRERELEASE=true
           fi
-          gh release create "${{ steps.tag.outputs.tag }}" \
-              --title "${{ steps.tag.outputs.tag }}" \
-              --notes-file release-notes.md \
-              $PRERELEASE_FLAG
+
+          # Idempotent: if the release already exists (e.g. a tag was
+          # moved/re-pushed), update it in place instead of failing on the
+          # duplicate-create 422.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — updating notes."
+            gh release edit "$TAG" \
+                --title "$TAG" \
+                --notes-file release-notes.md \
+                --prerelease="$PRERELEASE"
+            if [ "$PRERELEASE" = false ]; then
+              gh release edit "$TAG" --latest
+            fi
+          else
+            CREATE_FLAG="--latest"
+            [ "$PRERELEASE" = true ] && CREATE_FLAG="--prerelease"
+            gh release create "$TAG" \
+                --title "$TAG" \
+                --notes-file release-notes.md \
+                $CREATE_FLAG
+          fi
