@@ -35,6 +35,11 @@ code continues to compile unchanged.
   `#service(PostgresClient.self, name: "database")` expands to the
   hand-written computed property. Pulls `swift-syntax` only when the
   trait is enabled; consumers who don't opt in build none of it.
+- **`ServiceKey: ExpressibleByStringLiteral`** — a declaration body can
+  be just the `id` literal:
+  `var database: ServiceKey<PostgresClient> { "database" }`. Equivalent
+  to `ServiceKey(id: "database")`; trims the per-key boilerplate without
+  a macro or dependency.
 
 ### Changed
 

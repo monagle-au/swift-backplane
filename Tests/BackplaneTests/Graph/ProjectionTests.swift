@@ -88,6 +88,16 @@ extension Services {
 @Suite("ServiceGraph — projection-decoupled keys")
 struct ProjectionTests {
 
+    // MARK: Test 0 — ExpressibleByStringLiteral
+
+    /// A string literal is equivalent to `ServiceKey(id:)`.
+    @Test("ServiceKey is ExpressibleByStringLiteral on its id")
+    func testStringLiteralKey() {
+        let literal: ServiceKey<Counter> = "counter"
+        #expect(literal.id == "counter")
+        #expect(literal == ServiceKey<Counter>(id: "counter"))
+    }
+
     // MARK: Test 1 — Form 2 passive, protocol-typed key
 
     /// A `ServiceKey<any DemoStore>` registered with a concrete

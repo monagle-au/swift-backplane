@@ -15,13 +15,17 @@
 ///
 /// ```swift
 /// extension Services {
-///     public var database: ServiceKey<PostgresClient> {
-///         ServiceKey(id: "database")
-///     }
+///     public var database: ServiceKey<PostgresClient> { "database" }
 /// }
 ///
 /// let db = try await context.requireService(\.database)
 /// ```
+///
+/// `ServiceKey` is `ExpressibleByStringLiteral`, so a declaration body is
+/// just the `id` string. `ServiceKey(id: "database")` and `"database"`
+/// are equivalent; the literal form keeps the per-key line to the three
+/// things that matter — property name, resolved type, and the id (which
+/// also drives the entry's `ConfigReader` scope).
 ///
 /// `Value` is the *resolved* type, which need not equal the registered
 /// concrete type — it can be a protocol existential backed by a concrete
@@ -37,10 +41,20 @@
 /// }
 /// ```
 public struct ServiceKey<Value: Sendable>: Hashable, Sendable {
-    /// Stable string identity. Drives log labels and entry lookup.
+    /// Stable string identity. Drives log labels, entry lookup, and the
+    /// entry's `ConfigReader` scope prefix.
     public let id: String
 
     public init(id: String) {
         self.id = id
+    }
+}
+
+extension ServiceKey: ExpressibleByStringLiteral {
+    /// Construct a key from its `id` string literal — the terse form used
+    /// in a `Services` declaration body, e.g.
+    /// `var database: ServiceKey<PostgresClient> { "database" }`.
+    public init(stringLiteral value: String) {
+        self.id = value
     }
 }
