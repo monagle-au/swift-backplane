@@ -90,6 +90,14 @@ extension Services {
     public var postgres: ServiceKey<BackplanePostgresService> {
         ServiceKey(id: "postgres")
     }
+
+    /// Deprecated alias for ``postgres``. Renamed in 1.1.0 to drop the
+    /// `Key` suffix; both resolve the same entry (`id: "postgres"`).
+    /// Removed in 2.0.0.
+    @available(*, deprecated, renamed: "postgres")
+    public var postgresKey: ServiceKey<BackplanePostgresService> {
+        postgres
+    }
 }
 
 // MARK: - Descriptor

@@ -8,6 +8,46 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-06-06
+
+A backward-compatible release: decouples a key's resolved value from the
+lifecycle-managed unit, and adds an opt-in declaration macro. Existing
+code continues to compile unchanged.
+
+### Added
+
+- **Projection-decoupled keys** — a key's `Value` (what `requireService`
+  returns) is now independent of the `ManagedService` the graph
+  lifecycles, via a projection captured at registration. Two new
+  `EntryDescriptor` initialisers:
+  - `passive:` — the factory returns the key's `Value` directly (any
+    `Sendable`, including a protocol existential); the graph wraps it in
+    a `PassiveService` and unwraps on resolution, so the wrapper no
+    longer surfaces and `.inner` is gone at the call site.
+  - `factory:as:` — a concrete `ManagedService` is lifecycled while the
+    key resolves as a (typically protocol) `Value`; `as:` projects the
+    concrete onto the abstraction.
+  This lets a `ServiceKey<any Protocol>` be backed by a concrete
+  registration — the case type-keyed registries can't express. The
+  identity form is unchanged.
+- **`#service` macro** (`Macros` trait, off by default) — shorthand for
+  declaring a key on `Services`:
+  `#service(PostgresClient.self, name: "database")` expands to the
+  hand-written computed property. Pulls `swift-syntax` only when the
+  trait is enabled; consumers who don't opt in build none of it.
+
+### Changed
+
+- Service-key declarations no longer use a `Key` suffix by convention —
+  e.g. `Services.postgres` (was `Services.postgresKey`). The suffix
+  carried no meaning and read poorly at keypath call sites.
+
+### Deprecated
+
+- **`Services.postgresKey`** — renamed to `Services.postgres`. The old
+  name remains as a deprecated alias resolving the same entry, and is
+  scheduled for removal in 2.0.0.
+
 ## [1.0.0] — 2026-05-31
 
 The first stable release. From this point on, public-API changes
@@ -164,5 +204,6 @@ follow strict SemVer.
 - Swift 6.2+
 - macOS 15+
 
-[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/monagle-au/swift-backplane/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/monagle-au/swift-backplane/releases/tag/v1.0.0
