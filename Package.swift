@@ -2,6 +2,7 @@
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
+import CompilerPluginSupport
 
 let package = Package(
     name: "swift-backplane",
@@ -61,6 +62,10 @@ let package = Package(
             name: "KeyfileEncryption",
             description: "Enable LocalKeyfileEncryption (AES-256-GCM, machine-local keyfile) and the swift-crypto dependency on BackplaneVault."
         ),
+        .trait(
+            name: "Macros",
+            description: "Enable the #service declaration macro (pulls swift-syntax at build time; off by default)."
+        ),
     ],
     dependencies: [
         // Core Backplane — always resolved.
@@ -91,6 +96,17 @@ let package = Package(
         // trait pull no swift-crypto code into their binary.
         .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
 
+        // swift-syntax — used only by the BackplaneMacros compiler-plugin
+        // target. Resolved unconditionally (SwiftPM resolves the full
+        // dependency graph), but only *compiled* when the `Macros` trait
+        // links BackplaneMacros into Backplane — so consumers without the
+        // trait never build swift-syntax. The range is deliberately wide:
+        // it lets SwiftPM pick the version matching the active toolchain's
+        // prebuilt swift-syntax (Swift 6.0–6.3 → 600–603) and lets a
+        // macro-heavy consumer (already on some swift-syntax 6.x) dedupe
+        // to a single resolved copy rather than building a second one.
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", "600.0.0" ..< "604.0.0"),
+
         // DocC plugin — build-tool only. Powers
         // `swift package generate-documentation` for the four DocC
         // catalogs in this repo (Backplane, BackplanePostgres, BackplaneOTel,
@@ -110,6 +126,27 @@ let package = Package(
                 .product(name: "Metrics", package: "swift-metrics"),
                 .product(name: "Tracing", package: "swift-distributed-tracing"),
                 .product(name: "Instrumentation", package: "swift-distributed-tracing"),
+                // The #service macro plugin — linked (and thus swift-syntax
+                // compiled) only when the `Macros` trait is enabled. The
+                // `BACKPLANE_MACROS` define gates the macro *declaration* in
+                // ServiceKeyMacro.swift so the bare module references nothing.
+                .target(name: "BackplaneMacros", condition: .when(traits: ["Macros"])),
+            ],
+            swiftSettings: [
+                .define("BACKPLANE_MACROS", .when(traits: ["Macros"])),
+            ]
+        ),
+
+        // MARK: - BackplaneMacros (Macros trait)
+        // Compiler-plugin target backing the `#service` freestanding
+        // declaration macro. Builds swift-syntax, so it is only reached —
+        // and therefore only compiled — when a Macros-trait-enabled
+        // consumer links it via the Backplane target above.
+        .macro(
+            name: "BackplaneMacros",
+            dependencies: [
+                .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
+                .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
             ]
         ),
 
@@ -191,7 +228,26 @@ let package = Package(
         // MARK: - Tests
         .testTarget(
             name: "BackplaneTests",
-            dependencies: ["Backplane"]
+            dependencies: ["Backplane"],
+            swiftSettings: [
+                // Activates the `#if BACKPLANE_MACROS` end-to-end macro test
+                // when the suite is run with `--traits Macros`.
+                .define("BACKPLANE_MACROS", .when(traits: ["Macros"])),
+            ]
+        ),
+        // Unit tests for the BackplaneMacros plugin's derivation logic.
+        // Swift Testing only — no XCTest / SwiftSyntaxMacrosTestSupport.
+        // All source is gated behind `#if BACKPLANE_MACROS`, so with the
+        // trait off this target compiles to nothing and pulls no
+        // swift-syntax — plain `swift test` never builds the macro toolchain.
+        .testTarget(
+            name: "BackplaneMacrosTests",
+            dependencies: [
+                .target(name: "BackplaneMacros", condition: .when(traits: ["Macros"])),
+            ],
+            swiftSettings: [
+                .define("BACKPLANE_MACROS", .when(traits: ["Macros"])),
+            ]
         ),
         .testTarget(
             name: "BackplanePostgresTests",

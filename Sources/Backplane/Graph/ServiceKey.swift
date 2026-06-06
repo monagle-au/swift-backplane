@@ -27,6 +27,15 @@
 /// concrete type — it can be a protocol existential backed by a concrete
 /// registration. See ``EntryDescriptor``'s `passive:` and `factory:as:`
 /// initialisers.
+///
+/// With the package's `Macros` trait enabled, the `#service` macro is the
+/// opt-in shorthand for the computed-property declaration above:
+///
+/// ```swift
+/// extension Services {
+///     #service(PostgresClient.self, name: "database")
+/// }
+/// ```
 public struct ServiceKey<Value: Sendable>: Hashable, Sendable {
     /// Stable string identity. Drives log labels and entry lookup.
     public let id: String

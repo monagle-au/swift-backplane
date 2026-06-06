@@ -183,6 +183,26 @@ for what they don't enable.
   `PassthroughEncryption` always available;
   `LocalKeyfileEncryption` (AES-256-GCM) behind the
   `KeyfileEncryption` trait (pulls `swift-crypto`).
+- **`#service` macro** (`Macros` trait, **off by default**) — shorthand
+  for declaring a key on `Services`. Pulls `swift-syntax` only when the
+  trait is enabled; consumers without it pay nothing:
+
+  ```swift
+  extension Services {
+      #service(PostgresClient.self)                       // var postgresClient
+      #service(PostgresClient.self, name: "database")     // var database
+      #service((any AuditStore).self, name: "auditStore") // ServiceKey<any AuditStore>
+  }
+  ```
+
+  Expands to a `public var …: ServiceKey<…> { ServiceKey(id: …) }`. The
+  property name is derived from the type's trailing identifier (override
+  with `name:`); `id` defaults to the name (override with `id:`). The
+  generated property is always `public` — hand-write the key if you need
+  a non-public one. The macro plugin is built into the **`BackplaneMacros`**
+  target. Note: this repo's own `swift build`/CI compiles `swift-syntax`
+  because SwiftPM builds every declared target — but a downstream consumer
+  that doesn't enable the `Macros` trait builds none of it.
 
 ## Concurrency
 
