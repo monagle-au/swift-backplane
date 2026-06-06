@@ -214,14 +214,20 @@ Two important things this protocol does *not* require:
 ///
 /// ```swift
 /// extension Services {
-///     public var databaseKey: ServiceKey<PostgresClient> {
+///     public var database: ServiceKey<PostgresClient> {
 ///         ServiceKey(id: "database")
 ///     }
-///     public var httpKey: ServiceKey<MyHTTPServer> {
+///     public var http: ServiceKey<MyHTTPServer> {
 ///         ServiceKey(id: "http")
 ///     }
 /// }
 /// ```
+///
+/// No naming convention is imposed — name the property for the value
+/// (`database`), not `databaseKey`. The `Value` need not be the
+/// registered concrete type; it can be a protocol existential
+/// (`ServiceKey<any AuditStore>`) backed by a concrete registration —
+/// see §2.6.
 ///
 /// `Services` is a `public struct` with a no-arg `init`; the
 /// framework instantiates one at the keypath-resolution boundary
@@ -248,7 +254,7 @@ per-service `ServiceKey` conformer struct (one struct, a
 `defaultValue`, an `ObjectIdentifier`-based registry), the
 keypath-on-`Services` pattern is one line per entry, identical to the
 SwiftUI `EnvironmentValues` shape developers already know, and the
-keypath carries the typed `Value` so `requireService(\.databaseKey)`
+keypath carries the typed `Value` so `requireService(\.database)`
 infers the return type without a cast.
 
 **One namespace.** Backplane ships exactly one namespace, `Services`.
@@ -260,11 +266,13 @@ via the `ServiceKeyConvertible` protocol. Backplane does not ship a
 generic namespace-extension protocol because the single-namespace
 majority case shouldn't pay the abstraction cost.
 
-**No macro.** Earlier drafts of this design proposed a `@Register`
-peer macro to halve the per-key boilerplate. With the keypath-on-
-struct shape, the hand-written declaration is already a single line
-and reads exactly as a SwiftUI `@Entry` declaration would expand to.
-Backplane has no macro target.
+**Macro is opt-in, never required.** The hand-written declaration is
+already a single line, so the keypath-on-struct shape needs no macro to
+be ergonomic. A `#service` freestanding macro is offered purely as
+sugar behind the off-by-default `Macros` trait —
+`#service(PostgresClient.self, name: "database")` expands to exactly the
+declaration above. It pulls `swift-syntax` only when the trait is
+enabled; consumers who don't opt in build none of it. See §11.1.
 
 ### 2.5 `ServiceGraph` — the registry
 
@@ -411,6 +419,54 @@ back to the graph's surface. The mutable-state-in-closure pattern is
 the recommended idiom; it's the same one Acumen uses for its
 multi-instance integrations.
 
+#### Resolved value vs managed unit — the projection
+
+A key's `Value` (what `requireService` returns) is decoupled from the
+`ManagedService` the graph actually lifecycles. The descriptor carries a
+**projection** — `@Sendable (any ManagedService) -> any Sendable` —
+captured once at registration and applied at resolution time, *after*
+the entry is already running. Lifecycle (`start`/`shutdown`, blue-green
+replacement, hot reload) always operates on the managed unit; only
+resolution is projected. Every resolved value is provably `Sendable`
+(`ManagedService: Sendable`; `Value: Sendable`), so the projection
+returns `any Sendable` with no `@unchecked`.
+
+Three registration forms install three projections:
+
+```swift
+// Form 1 — identity. Value == the ManagedService. project = { $0 }.
+EntryDescriptor(\.cache) { _ in CacheService() }            // ServiceKey<CacheService>
+
+// Form 2 — passive. Value is any Sendable (incl. a protocol); the graph
+// wraps it in a PassiveService and unwraps on resolution. The wrapper
+// never surfaces — this is what removes the old `.inner` dance.
+EntryDescriptor(\.auditStore, passive: { _ in              // ServiceKey<any AuditStore>
+    ClickHouseAuditStore(...)                              // concrete, upcast to the protocol
+})
+
+// Form 3 — projected. A concrete ManagedService with its own run loop is
+// lifecycled, but resolved as a protocol. `as:` maps concrete -> Value.
+EntryDescriptor(\.auditStore,                              // ServiceKey<any AuditStore>
+    factory: { _ in ClickHouseAuditService(...) },         // a ManagedService
+    as: { $0 })                                            // -> any AuditStore
+```
+
+This is precisely what keying-by-type cannot express: with an explicit
+key the `Value` (the protocol) and the registered concrete are two
+independent slots; a type-keyed registry collapses them into one.
+
+**On `as: { $0 }`.** Form 3's projection is written explicitly even for
+the common "concrete conforms to the protocol, just up-cast" case. It
+*looks* like ceremony, but Swift can't supply it for us: the constraint
+we'd want — `where Service: Value` — is inexpressible when `Value` is an
+existential (`any AuditStore` is a type, not a protocol you can constrain
+a generic against), so no defaulted `as:` and no auto-synthesis. The
+only way to drop the closure would be a runtime-checked up-cast
+(`as? Value`, trapping at boot on a non-conformance) — which trades a
+compile-time guarantee for a boot-time crash. We keep the explicit
+closure: Form 3 is the rare case (most services are Form 1 or Form 2),
+and the one-closure cost buys static conformance checking.
+
 ### 2.7 `ServiceContext` — the reader
 
 ```swift
@@ -504,7 +560,7 @@ public protocol BackplaneCommand: AsyncParsableCommand {
 
 ```swift
 extension Services {
-    public var httpKey: ServiceKey<MyHTTPServer> { ServiceKey(id: "http") }
+    public var http: ServiceKey<MyHTTPServer> { ServiceKey(id: "http") }
 }
 
 @main
@@ -521,7 +577,7 @@ struct MyApp: BackplaneApplication {
             postgresEntryDescriptor(),
 
             EntryDescriptor(
-                services.httpKey,
+                services.http,
                 dependencies: [AnyServiceKey(keyPath: \.postgres)]
             ) { context in
                 let pg = try await context.requireService(\.postgres)
@@ -534,7 +590,7 @@ struct MyApp: BackplaneApplication {
 struct ServeCommand: PersistentCommand {
     typealias App = MyApp
     static let configuration = CommandConfiguration(abstract: "Run the server")
-    var requiredServices: [PartialKeyPath<Services>] { [\.httpKey] }
+    var requiredServices: [PartialKeyPath<Services>] { [\.http] }
 }
 ```
 
@@ -557,7 +613,7 @@ health surface that the service genuinely has and the consumer may
 want to observe.
 
 ```swift
-let pg = try await context.requireService(\.databaseKey)
+let pg = try await context.requireService(\.database)
 try await pg.client.query("SELECT 1")     // resource access
 let state = pg.context.lifecycle.state    // lifecycle observability
 // pg.context.health is the service-side write surface; the consumer
@@ -624,7 +680,7 @@ struct AppCommand: AsyncParsableCommand {
 struct ServeCommand: PersistentCommand {
     typealias App = MyApp
     var requiredServices: [PartialKeyPath<Services>] {
-        [\.httpKey, \.metricsExporterKey]
+        [\.http, \.metricsExporter]
     }
 }
 
@@ -632,11 +688,11 @@ struct MigrateCommand: TaskCommand {
     typealias App = MyApp
     // Migrations need only the database.
     var requiredServices: [PartialKeyPath<Services>] {
-        [\.databaseKey]
+        [\.database]
     }
 
     func execute(with context: ServiceContext) async throws {
-        let pg = try await context.requireService(\.databaseKey)
+        let pg = try await context.requireService(\.database)
         try await runMigrations(on: pg.client)
     }
 }
@@ -646,7 +702,7 @@ struct AdminCommand: TaskCommand {
     @Argument var operation: String
 
     var requiredServices: [PartialKeyPath<Services>] {
-        [\.databaseKey, \.adminAPIKey]
+        [\.database, \.adminAPI]
     }
 
     func execute(with context: ServiceContext) async throws { ... }
@@ -1528,7 +1584,7 @@ either end paying for the other's complexity.
 
 ```swift
 extension Services {
-    public var httpKey: ServiceKey<MyHTTPServer> { ServiceKey(id: "http") }
+    public var http: ServiceKey<MyHTTPServer> { ServiceKey(id: "http") }
 }
 
 @main
@@ -1538,8 +1594,8 @@ struct App: BackplaneApplication {
 
     static func services() -> [EntryDescriptor] {
         [
-            EntryDescriptor(Services().httpKey) { _ in
-                PassiveService(MyHTTPServer())
+            EntryDescriptor(Services().http) { _ in
+                MyHTTPServer()                       // a ManagedService
             },
         ]
     }
@@ -1635,17 +1691,37 @@ restart-aware machinery in §7 (blue-green replacement, `restart(at:)`,
 operating purely against the §2–§6 spine — typed keys, dependency boot,
 resolution, health reporting — can skip them.
 
-### 11.1 Macro: not shipped
+### 11.1 Macro: shipped, opt-in
 
-**Resolved.** Backplane does not ship a `@Register` (or equivalent)
-peer macro. Earlier drafts of this design carried one behind a
-`Macros` package trait. Once the consumer-facing surface became
-`extension Services { var fooKey: ServiceKey<T> { ... } }` — a single
-line whose readability is identical to the macro's expansion — the
-macro stopped earning the `swift-syntax` dependency it imposed. A
-consumer who finds the per-key declaration verbose can write their
-own peer macro on top of Backplane in a few hundred lines and bring
-their own `swift-syntax`.
+**Resolved.** Backplane ships a `#service` freestanding declaration
+macro behind the off-by-default `Macros` trait. The hand-written
+declaration — `extension Services { var foo: ServiceKey<T> { ... } }` —
+remains the always-available baseline, a single line whose readability
+matches the macro's expansion, so the macro is sugar rather than a
+requirement.
+
+`#service(PostgresClient.self, name: "database")` expands to that exact
+declaration. The property name is derived from the type's trailing
+identifier (override with `name:`); `id` defaults to the name (override
+with `id:`); a protocol-typed key is `#service((any AuditStore).self,
+name: "auditStore")`. The generated property is always `public` — keys
+needing narrower access are hand-written.
+
+The plugin lives in a separate `BackplaneMacros` target and pulls
+`swift-syntax` *only* when the trait is enabled. A downstream consumer
+that doesn't opt in compiles none of it (verified directly). Note one
+asymmetry: building Backplane's *own* package compiles `swift-syntax`,
+because SwiftPM builds every declared target — but that cost is the
+repo's, not the consumer's.
+
+Two implementation constraints worth recording. (1) The plugin is
+deliberately **Foundation-free**: importing Foundation into a compiler
+plugin caused a wild-pointer crash during macro expansion, so name
+derivation uses pure-stdlib string handling. (2) Macro tests are **Swift
+Testing**, not XCTest — the derivation logic is unit-tested as a pure
+function and full expansion is covered behaviourally (use `#service`,
+assert the generated keys), keeping the test surface free of
+`SwiftSyntaxMacrosTestSupport`/XCTest and cross-platform.
 
 ### 11.2 What signals "new generation is healthy enough to swap"? [§7-tier]
 
