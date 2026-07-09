@@ -268,8 +268,7 @@ public actor ConfigStoreBackend {
         // Populate MutableInMemoryProvider with scoped keys
         var initial: [AbsoluteConfigKey: ConfigValue] = [:]
         for (key, value) in values {
-            let components = scope.isEmpty ? [key] : [scope, key]
-            let absKey = AbsoluteConfigKey(components.flatMap { $0.split(separator: ".").map(String.init) })
+            let absKey = Self.absoluteKey(scope: scope, key: key)
             let configValue = Self.toConfigValue(value, encryption: encryption)
             initial[absKey] = configValue
         }
@@ -298,7 +297,7 @@ public actor ConfigStoreBackend {
 
         var initial: [AbsoluteConfigKey: ConfigValue] = [:]
         for (key, value) in inMemoryValues {
-            let absKey = AbsoluteConfigKey(key.split(separator: ".").map(String.init))
+            let absKey = Self.absoluteKey(scope: "", key: key)
             initial[absKey] = ConfigValue(.string(value), isSecret: false)
         }
 
@@ -312,12 +311,24 @@ public actor ConfigStoreBackend {
 
     // MARK: - Write Operations
 
+    /// Build the absolute in-memory key for a config key under this store's scope.
+    ///
+    /// Both the scope and the key are split on "." — a scope may itself be a
+    /// dotted identifier (e.g. `"service.database"`), and the reader is
+    /// scoped via `ConfigReader.scoped(to:)` which splits the same way.
+    /// Every read AND write path must build keys through this one helper: a
+    /// scope kept as a single component writes to `["service.database", key]`
+    /// while the scoped reader queries `["service", "database", key]`,
+    /// silently breaking write-through until the file is re-read from disk.
+    static func absoluteKey(scope: String, key: String) -> AbsoluteConfigKey {
+        let components = scope.isEmpty ? [key] : [scope, key]
+        return AbsoluteConfigKey(components.flatMap { $0.split(separator: ".").map(String.init) })
+    }
+
     /// Set a value in both the in-memory provider and the JSON file.
     func setValue(_ content: ConfigContent, forKey key: String, isSecret: Bool) throws {
         // Update in-memory provider (thread-safe, immediate)
-        let components = scope.isEmpty ? key.split(separator: ".").map(String.init)
-            : [scope] + key.split(separator: ".").map(String.init)
-        let absKey = AbsoluteConfigKey(components)
+        let absKey = Self.absoluteKey(scope: scope, key: key)
         mutableProvider.setValue(ConfigValue(content, isSecret: isSecret), forKey: absKey)
 
         // Update current values and persist to file
@@ -338,9 +349,7 @@ public actor ConfigStoreBackend {
     /// Remove a value from both the in-memory provider and the JSON file.
     func removeValue(forKey key: String) throws {
         // Remove from in-memory provider
-        let components = scope.isEmpty ? key.split(separator: ".").map(String.init)
-            : [scope] + key.split(separator: ".").map(String.init)
-        let absKey = AbsoluteConfigKey(components)
+        let absKey = Self.absoluteKey(scope: scope, key: key)
         mutableProvider.setValue(nil, forKey: absKey)
 
         // Remove from current values and persist
@@ -359,18 +368,13 @@ public actor ConfigStoreBackend {
 
         // Clear removed keys
         for key in currentValues.keys where newValues[key] == nil {
-            let components = scope.isEmpty ? key.split(separator: ".").map(String.init)
-                : [scope] + key.split(separator: ".").map(String.init)
-            let absKey = AbsoluteConfigKey(components)
-            mutableProvider.setValue(nil, forKey: absKey)
+            mutableProvider.setValue(nil, forKey: Self.absoluteKey(scope: scope, key: key))
         }
 
         // Set new/updated keys
         for (key, value) in newValues {
-            let components = scope.isEmpty ? [key] : [scope, key]
-            let absKey = AbsoluteConfigKey(components.flatMap { $0.split(separator: ".").map(String.init) })
             let configValue = Self.toConfigValue(value, encryption: encryption)
-            mutableProvider.setValue(configValue, forKey: absKey)
+            mutableProvider.setValue(configValue, forKey: Self.absoluteKey(scope: scope, key: key))
         }
 
         currentValues = newValues
