@@ -180,4 +180,67 @@ struct ConfigStoreTests {
         try await store.set("hello", forKey: "key")
         #expect(store.reader.string(forKey: "key") == "hello")
     }
+
+    // MARK: - Dotted scopes
+    //
+    // A scope may itself be a dotted identifier (e.g. "service.database").
+    // The scoped reader splits the scope on ".", so every write path must
+    // too — a write that keeps the scope as a single key component is
+    // invisible to the reader until the file is re-read from disk
+    // (regression: credentials written through the store were unreadable
+    // in the same process, but appeared after a restart).
+
+    @Test("Write-through is readable with a dotted scope")
+    func dottedScopeWriteThrough() async throws {
+        let tmpDir = makeTempDir()
+        let path = tmpDir.appendingPathComponent("config.json").path
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let store = try ConfigStore(
+            filePath: path,
+            scope: "service.database",
+            encryption: encryption,
+            environmentProvider: nil
+        )
+        try await store.set("db.example.com", forKey: "host")
+        try await store.setSecret("s3cret", forKey: "password")
+
+        // Same store instance must see its own writes immediately.
+        #expect(store.reader.string(forKey: "host") == "db.example.com")
+        #expect(store.secret(forKey: "password") == "s3cret")
+
+        // And a fresh store from the same file agrees.
+        let store2 = try ConfigStore(
+            filePath: path,
+            scope: "service.database",
+            encryption: encryption,
+            environmentProvider: nil
+        )
+        #expect(store2.reader.string(forKey: "host") == "db.example.com")
+    }
+
+    @Test("Remove and reload clear keys with a dotted scope")
+    func dottedScopeRemoveAndReload() async throws {
+        let tmpDir = makeTempDir()
+        let path = tmpDir.appendingPathComponent("config.json").path
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let store = try ConfigStore(
+            filePath: path,
+            scope: "worker.job-queue",
+            encryption: encryption,
+            environmentProvider: nil
+        )
+        try await store.set("value", forKey: "key")
+        #expect(store.reader.string(forKey: "key") == "value")
+
+        try await store.remove(key: "key")
+        #expect(store.reader.string(forKey: "key") == nil)
+
+        // reload() must clear in-memory keys deleted from the file.
+        try await store.set("value2", forKey: "key2")
+        try ConfigWriter.write([:], to: path)
+        try await store.reload()
+        #expect(store.reader.string(forKey: "key2") == nil)
+    }
 }
