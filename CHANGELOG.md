@@ -8,6 +8,13 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-19
+
+A backward-compatible release: adds the missing exit edge from
+`ServiceState.failed`, enabling consumer-side startup-retry supervisors.
+Existing code continues to compile unchanged; `restart(at:)`'s contract
+is untouched.
+
 ### Added
 
 - **`ServiceGraph.recover(at:)`** — re-runs a `.failed` entry's factory and
