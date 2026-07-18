@@ -1876,6 +1876,17 @@ lifecycle stream; consumers wire whatever supervisor matches their
 operational shape. A reference implementation in the Backplane DocC
 catalog is fine; it doesn't need to be in the framework binary.
 
+**Update (1.2.0):** the lean holds — no supervisor ships in the graph —
+but consumer-side supervisors were previously *impossible* for boot
+failures: `.failed` had no exit edge. `restart(at:)` refuses it by
+design (its failure paths land `.degraded`, whose contract "the old
+generation continues serving" is false when nothing ever served).
+`recover(at:)` closes exactly that gap: a cold re-boot of a `.failed`
+entry, gated on the same subgroup restartability, with failure paths
+landing back in `.failed` and the swapped-out failed generation drained
+with zero grace. Retry policy, backoff, and escalation remain consumer
+concerns layered on `stateStream(of:)` + `recover(at:)`.
+
 ### 11.12 Replacement-failure escalation threshold [§7-tier]
 
 §7 mentions "after a configurable threshold of consecutive failed
@@ -1889,9 +1900,11 @@ transitions to `.failed`." Two sub-questions:
   cool-down?
 
 **Lean:** Graph-wide config in v1; per-service if a clear use case
-emerges. `.failed` is terminal — consumers explicitly issue
-`restart(at:)` to leave it. Auto-recovery from `.failed` blurs the
-line between transient and permanent failure.
+emerges. `.failed` is terminal for the *graph* — it never leaves the
+state on its own; since 1.2.0 consumers explicitly issue `recover(at:)`
+to leave it (`restart(at:)` still refuses `.failed`). Auto-recovery
+inside the graph would blur the line between transient and permanent
+failure; a consumer supervisor owns that judgement.
 
 ### 11.13 Health-report rate limiting
 
