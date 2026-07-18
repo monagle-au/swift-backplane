@@ -8,6 +8,21 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+### Added
+
+- **`ServiceGraph.recover(at:)`** — re-runs a `.failed` entry's factory and
+  `start()` as a fresh generation. `.failed` was previously terminal:
+  `restart(at:)` only acts on `.running`/`.degraded`, so an entry whose
+  boot-time `start()` threw could never be revived. `recover(at:)` is the
+  missing edge: gated on the same subgroup restartability as
+  `restart(at:)`, `.failed`-only, with failure paths that land back in
+  `.failed` (never `.degraded` — a resolution-ready state always means a
+  live serving instance). The swapped-out failed generation is drained
+  with zero grace so a `start()` that acquired resources before throwing
+  still gets its `shutdown()`. Consumers can now build retry-with-backoff
+  supervisors for boot failures entirely on the public API
+  (`stateStream(of:)` + `recover(at:)`), as the design note intends.
+
 ## [1.1.0] — 2026-06-06
 
 A backward-compatible release: decouples a key's resolved value from the

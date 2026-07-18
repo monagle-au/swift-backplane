@@ -776,6 +776,130 @@ public actor ServiceGraph {
         entry.swapReplacementTask(task)?.cancel()
     }
 
+    // MARK: - Recover (from .failed)
+
+    /// Re-run a `.failed` entry's factory and `start()` as a fresh generation.
+    ///
+    /// ``restart(at:)`` deliberately refuses entries in
+    /// ``ServiceState/failed(fault:)``: its failure paths land
+    /// ``ServiceState/degraded(fault:)``, whose contract is "the old
+    /// generation continues serving" — false when nothing ever served.
+    /// `recover(at:)` is the missing edge out of `.failed`: a cold re-boot
+    /// of the entry.
+    ///
+    /// Semantics:
+    /// - Only entries currently `.failed` are recovered; any other state is
+    ///   a logged no-op. Subgroup restartability is honoured exactly as in
+    ///   ``restart(at:)``.
+    /// - The entry stays `.failed` while the factory runs — `.starting` is
+    ///   only observable once a live handle is swapped in (the same
+    ///   swap-before-notify ordering as boot).
+    /// - Failure at any point (factory or `start()`) returns the entry to
+    ///   `.failed` with the fresh fault — never `.degraded` — and the entry
+    ///   remains recoverable.
+    /// - The swapped-out failed generation (present when the original
+    ///   `start()` threw after its factory succeeded) is drained with zero
+    ///   grace: it never served, but its `start()` may have acquired
+    ///   resources, so `shutdown()` still runs, bounded by the graph's
+    ///   shutdown timeout.
+    /// - On success the entry transitions `.starting` → `.running` —
+    ///   the same edges lifecycle-stream observers see during a normal boot.
+    ///
+    /// The method returns immediately after spawning the recovery task.
+    /// Observe the lifecycle stream to track progress. "Latest wins": an
+    /// in-flight recovery still in its factory phase is cancelled by a
+    /// subsequent `recover(at:)`.
+    public func recover(at id: String) async {
+        guard let entry = entries[id] else {
+            logger?.warning("recover(at:) called for unknown id '\(id)'")
+            return
+        }
+
+        // Honour the subgroup policy — same gate as restart(at:).
+        let policy = self.policy(for: entry.descriptor.subgroup)
+        guard policy.restartable else {
+            logger?.warning(
+                "recover(at:) ignored — '\(id)' is in non-restartable subgroup '\(entry.descriptor.subgroup.rawValue)'"
+            )
+            return
+        }
+
+        // Only recover from .failed. Live states go through restart(at:).
+        switch entry.currentState {
+        case .failed:
+            break
+        default:
+            logger?.warning("recover(at:) ignored for '\(id)' in state \(entry.currentState)")
+            return
+        }
+
+        let descriptor = entry.descriptor
+        let shutdownTimeout = self.shutdownTimeout
+        let context = makeContext(for: entry)
+
+        // Spawn a detached recovery task so the actor is not held during
+        // the potentially-slow factory() and start() calls.
+        let task = Task.detached { [logger] in
+            // Phase 1: build the new instance. The entry stays `.failed`
+            // throughout — nothing is serving, and `.starting` must only
+            // be observable with a live handle in place.
+            let newInstance: any ManagedService
+            do {
+                newInstance = try await descriptor.factory(context)
+            } catch {
+                entry.transition(to: .failed(fault: ServiceFault(from: error)))
+                logger?.error("Recovery factory failed for '\(descriptor.id)': \(error)")
+                return
+            }
+
+            // A newer recover superseded this one; the winner owns the
+            // entry's state from here.
+            guard !Task.isCancelled else { return }
+
+            // Phase 2: swap the active generation, then fire `.starting`
+            // (swap-before-notify, as in boot). The swapped-out generation
+            // — if any — is the instance whose start() threw. It never
+            // served, so drain it with zero grace; shutdown() still runs
+            // because its start() may have acquired resources before
+            // throwing.
+            let newGen = Generation(id: entry.nextGenerationID(), instance: newInstance)
+            let failedGen = entry.swapActiveGeneration(to: newGen)
+            entry.transition(to: .starting)
+
+            if let failedGen {
+                Task.detached {
+                    await ServiceGraph.drain(
+                        failedGen,
+                        entry: entry,
+                        grace: .zero,
+                        shutdownTimeout: shutdownTimeout,
+                        logger: logger
+                    )
+                }
+            }
+
+            // Phase 3: start the new generation.
+            do {
+                try await newInstance.start()
+            } catch {
+                // Back to `.failed`, NOT `.degraded` — resolution-ready
+                // states must always mean a live serving instance. The
+                // entry remains recoverable.
+                entry.transition(to: .failed(fault: ServiceFault(from: error)))
+                logger?.error("Recovery start() failed for '\(descriptor.id)': \(error)")
+                return
+            }
+
+            guard !Task.isCancelled else { return }
+
+            entry.transition(to: .running)
+            logger?.debug("Recovery completed for '\(descriptor.id)' (gen \(newGen.id))")
+        }
+
+        // Cancel any prior in-flight replacement or recovery (latest wins).
+        entry.swapReplacementTask(task)?.cancel()
+    }
+
     // MARK: - Reload
 
     /// Apply new configuration to an entry's live service in place.
