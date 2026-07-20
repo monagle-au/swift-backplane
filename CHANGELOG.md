@@ -8,6 +8,46 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-07-21
+
+A backward-compatible release: `BackplaneVault`'s `ConfigStore` is now
+safe for concurrent stores on one file — across processes and within one
+process. Fixes a cross-process lost-update bug where a store rewrote the
+whole file from its in-memory snapshot, erasing every key another store
+wrote after that snapshot was taken.
+
+### Fixed
+
+- **`ConfigStore` lost updates across concurrent stores** — `set`,
+  `setSecret`, and `remove(key:)` no longer rewrite the file from the
+  store's in-memory snapshot. Each write acquires an advisory
+  cross-process file lock, re-reads the file fresh, applies the single
+  key change, and writes back atomically — a stale store can no longer
+  erase keys written by another process (or by another store instance in
+  the same process; actor isolation never covered those) after its
+  snapshot was taken. The guarantee is *no lost keys*, per-key
+  last-writer-wins — not snapshot isolation; deterministic read
+  visibility of external writes still requires `reload()` (a local
+  write refreshes opportunistically from the merged result). `reload()`
+  runs under the same lock. Atomic temp+rename writes, `0o600`
+  permissions, secret detection on load, and dotted-scope write-through
+  are all preserved.
+
+### Added
+
+- **`FileLock`** — the advisory cross-process lock primitive behind the
+  fix, public for consumers guarding their own whole-document files:
+  `flock(2)` on a sidecar `<file>.lock` (never the data file itself —
+  atomic replace swaps inodes, which would defeat a lock on the data
+  file's descriptor), bounded-wait acquisition with a descriptive
+  timeout error, async (`acquire`) and thread-blocking
+  (`acquireBlocking`) variants. The sidecar is created `0o600` and
+  intentionally never unlinked.
+- `ConfigWriter.merge(key:value:filePath:lockTimeout:)` now performs its
+  read-merge-write while holding the file's lock. The added
+  `lockTimeout` parameter is defaulted, so existing call sites compile
+  unchanged.
+
 ## [1.2.0] — 2026-07-19
 
 A backward-compatible release: adds the missing exit edge from
@@ -231,6 +271,8 @@ follow strict SemVer.
 - Swift 6.2+
 - macOS 15+
 
-[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/monagle-au/swift-backplane/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/monagle-au/swift-backplane/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/monagle-au/swift-backplane/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/monagle-au/swift-backplane/releases/tag/v1.0.0

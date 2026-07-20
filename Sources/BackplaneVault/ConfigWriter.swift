@@ -70,15 +70,43 @@ public struct ConfigWriter: Sendable {
 
     /// Merge a single key-value pair into an existing JSON file.
     ///
-    /// Reads the current file contents (or starts with an empty dictionary),
-    /// sets the key, and writes back atomically.
+    /// Reads the current file contents fresh (or starts with an empty
+    /// dictionary), sets the key, and writes back atomically — all while
+    /// holding the file's cross-process ``FileLock``, so a concurrent writer
+    /// in another process (or another store on the same file in this
+    /// process) can never have its keys erased by this write.
+    ///
+    /// This is the synchronous entry point; the wait for the lock parks the
+    /// calling thread for at most `lockTimeout`. Async callers that manage
+    /// the lock themselves use ``mergeHoldingLock(key:value:filePath:)``.
     ///
     /// - Parameters:
     ///   - key: The dot-separated key to set.
     ///   - value: The value to set. Pass `nil` to remove the key.
     ///   - filePath: Absolute path to the JSON file.
-    /// - Throws: If the file cannot be read or written.
-    public static func merge(key: String, value: Any?, filePath: String) throws {
+    ///   - lockTimeout: How long to wait for the file lock before throwing
+    ///     ``FileLockError/timedOut(lockFilePath:timeout:)``.
+    /// - Throws: If the lock cannot be acquired or the file cannot be read
+    ///   or written.
+    public static func merge(
+        key: String,
+        value: Any?,
+        filePath: String,
+        lockTimeout: Duration = .seconds(5)
+    ) throws {
+        let lock = try FileLock.acquireBlocking(forProtecting: filePath, timeout: lockTimeout)
+        defer { lock.release() }
+        try mergeHoldingLock(key: key, value: value, filePath: filePath)
+    }
+
+    /// The read-merge-write core shared by ``merge(key:value:filePath:lockTimeout:)``
+    /// and `ConfigStoreBackend`. Callers MUST hold the file's ``FileLock``
+    /// for the duration of the call.
+    ///
+    /// - Returns: The full merged dictionary that was written, so callers
+    ///   can refresh in-memory state from the authoritative result.
+    @discardableResult
+    static func mergeHoldingLock(key: String, value: Any?, filePath: String) throws -> [String: Any] {
         var values = try read(filePath: filePath)
         if let value {
             values[key] = value
@@ -86,6 +114,7 @@ public struct ConfigWriter: Sendable {
             values.removeValue(forKey: key)
         }
         try write(values, to: filePath)
+        return values
     }
 
     // MARK: - Flatten / Unflatten

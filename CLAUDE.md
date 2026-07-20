@@ -180,9 +180,12 @@ for what they don't enable.
 - **`BackplaneGCP`** (`GCP`) — `GCPLogHandler`, `GCPTracer`,
   `CloudTraceExporter`, `BackplaneGCP.cloudRunOrStream`.
 - **`BackplaneVault`** — `ConfigStore`, `ConfigEncryption`,
-  `PassthroughEncryption` always available;
+  `PassthroughEncryption`, `FileLock` always available;
   `LocalKeyfileEncryption` (AES-256-GCM) behind the
   `KeyfileEncryption` trait (pulls `swift-crypto`).
+  `ConfigStore` writes are locked read-merge-writes (`flock(2)` on a
+  sidecar `<file>.lock`), so concurrent stores on one file — across
+  processes or within one — never lose each other's keys.
 - **`#service` macro** (`Macros` trait, **off by default**) — shorthand
   for declaring a key on `Services`. Pulls `swift-syntax` only when the
   trait is enabled; consumers without it pay nothing:

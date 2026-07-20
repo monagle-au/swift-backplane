@@ -33,6 +33,18 @@ import Foundation
 /// try await configStore.set("192.168.1.10", forKey: "bridgeIP")
 /// ```
 ///
+/// ## Concurrent stores on one file
+///
+/// Multiple `ConfigStore`s may safely share one file — across processes
+/// (e.g. the daemon and the home process by design) and within one process.
+/// Every write is a locked read-merge-write under an advisory ``FileLock``:
+/// the file is re-read fresh and only the written key changes, so a write
+/// can never erase keys another store wrote after this store last loaded.
+/// The guarantee is **no lost keys** with per-key last-writer-wins; it is
+/// *not* snapshot isolation. Reads still come from this store's in-memory
+/// state — call ``reload()`` when you need to *see* keys written externally
+/// (a local write also refreshes opportunistically from the merged file).
+///
 /// ## Secrets
 ///
 /// Secrets are stored encrypted both on disk (JSON file) and in-memory
@@ -232,7 +244,12 @@ public struct ConfigStore: Sendable {
 /// Actor that serializes file writes and manages the in-memory config state.
 ///
 /// Uses `MutableInMemoryProvider` from swift-configuration for thread-safe
-/// write-through semantics. File writes are serialized by actor isolation.
+/// write-through semantics. Writes within this backend are serialized by
+/// actor isolation; writes from *other* backends on the same file (other
+/// processes, or other instances in this process — actor isolation does not
+/// cover those) are excluded by the per-write ``FileLock`` and survive
+/// because every write merges into a fresh read of the file rather than
+/// rewriting from this backend's snapshot.
 public actor ConfigStoreBackend {
     let filePath: String
     let scope: String
@@ -245,8 +262,10 @@ public actor ConfigStoreBackend {
     /// The composed ConfigReader: env vars (if present) + mutable provider.
     nonisolated let reader: ConfigReader
 
-    /// Current flat key-value state (mirrors what's in the JSON file).
-    /// Only accessed within the actor for file writes.
+    /// Cache of the flat key-value file state as of the last locked
+    /// write/reload. Never used as the source for a file write — writes
+    /// re-read the file under the lock — so staleness here can delay read
+    /// visibility but can never destroy another writer's keys.
     private var currentValues: [String: Any]
 
     // MARK: - Init (file-backed)
@@ -326,12 +345,15 @@ public actor ConfigStoreBackend {
     }
 
     /// Set a value in both the in-memory provider and the JSON file.
-    func setValue(_ content: ConfigContent, forKey key: String, isSecret: Bool) throws {
-        // Update in-memory provider (thread-safe, immediate)
+    ///
+    /// The file update is a locked read-merge-write: acquire the file's
+    /// cross-process ``FileLock``, re-read the file fresh, apply this single
+    /// key, write back atomically, release. The in-memory snapshot is never
+    /// what gets written, so keys another process (or another store on the
+    /// same file) wrote after this store loaded can never be erased —
+    /// the guarantee is *no lost keys*, per-key last-writer-wins.
+    func setValue(_ content: ConfigContent, forKey key: String, isSecret: Bool) async throws {
         let absKey = Self.absoluteKey(scope: scope, key: key)
-        mutableProvider.setValue(ConfigValue(content, isSecret: isSecret), forKey: absKey)
-
-        // Update current values and persist to file
         let jsonValue: Any = switch content {
         case .string(let s): s
         case .int(let i): i
@@ -339,44 +361,83 @@ public actor ConfigStoreBackend {
         case .bool(let b): b
         default: String(describing: content)
         }
-        currentValues[key] = jsonValue
 
-        if !filePath.isEmpty {
-            try ConfigWriter.write(currentValues, to: filePath)
+        guard !filePath.isEmpty else {
+            // In-memory only (testing) — no file, no lock.
+            mutableProvider.setValue(ConfigValue(content, isSecret: isSecret), forKey: absKey)
+            currentValues[key] = jsonValue
+            return
         }
+
+        let merged: [String: Any]
+        do {
+            let lock = try await FileLock.acquire(forProtecting: filePath)
+            defer { lock.release() }
+            merged = try ConfigWriter.mergeHoldingLock(key: key, value: jsonValue, filePath: filePath)
+        }
+        syncInMemory(with: merged)
+
+        // Re-assert the written key with the caller-declared secrecy:
+        // syncInMemory re-derives isSecret by ciphertext detection, but the
+        // caller knows authoritatively whether this value is a secret.
+        mutableProvider.setValue(ConfigValue(content, isSecret: isSecret), forKey: absKey)
     }
 
     /// Remove a value from both the in-memory provider and the JSON file.
-    func removeValue(forKey key: String) throws {
-        // Remove from in-memory provider
+    ///
+    /// Same locked read-merge-write as `setValue` — only this key is
+    /// removed; keys written by other processes survive.
+    func removeValue(forKey key: String) async throws {
         let absKey = Self.absoluteKey(scope: scope, key: key)
-        mutableProvider.setValue(nil, forKey: absKey)
 
-        // Remove from current values and persist
-        currentValues.removeValue(forKey: key)
-
-        if !filePath.isEmpty {
-            try ConfigWriter.write(currentValues, to: filePath)
+        guard !filePath.isEmpty else {
+            mutableProvider.setValue(nil, forKey: absKey)
+            currentValues.removeValue(forKey: key)
+            return
         }
+
+        let merged: [String: Any]
+        do {
+            let lock = try await FileLock.acquire(forProtecting: filePath)
+            defer { lock.release() }
+            merged = try ConfigWriter.mergeHoldingLock(key: key, value: nil, filePath: filePath)
+        }
+        syncInMemory(with: merged)
+        mutableProvider.setValue(nil, forKey: absKey)
     }
 
     /// Reload the JSON file from disk and update the in-memory provider.
-    func reload() throws {
+    ///
+    /// Held under the same ``FileLock`` as writes so a reload can never
+    /// observe (or race) a concurrent read-merge-write from another store.
+    func reload() async throws {
         guard !filePath.isEmpty else { return }
 
-        let newValues = try ConfigWriter.read(filePath: filePath)
+        let newValues: [String: Any]
+        do {
+            let lock = try await FileLock.acquire(forProtecting: filePath)
+            defer { lock.release() }
+            newValues = try ConfigWriter.read(filePath: filePath)
+        }
+        syncInMemory(with: newValues)
+    }
 
-        // Clear removed keys
+    /// Replace in-memory state (`currentValues` + the mutable provider) with
+    /// an authoritative file snapshot: clears keys no longer present, then
+    /// sets every key from the snapshot.
+    ///
+    /// Called after every locked write with the merged result, so keys other
+    /// processes wrote become *visible opportunistically* here — but the only
+    /// guarantee is that they are never destroyed. Deterministic read
+    /// visibility of external writes still requires ``reload()``.
+    private func syncInMemory(with newValues: [String: Any]) {
         for key in currentValues.keys where newValues[key] == nil {
             mutableProvider.setValue(nil, forKey: Self.absoluteKey(scope: scope, key: key))
         }
-
-        // Set new/updated keys
         for (key, value) in newValues {
             let configValue = Self.toConfigValue(value, encryption: encryption)
             mutableProvider.setValue(configValue, forKey: Self.absoluteKey(scope: scope, key: key))
         }
-
         currentValues = newValues
     }
 
