@@ -72,7 +72,7 @@ the ones you need:
 | Trait      | Library product   | Adds                                                     |
 |------------|-------------------|----------------------------------------------------------|
 | (none)     | `Backplane`        | Core framework, always available.                        |
-| (none)     | `BackplaneVault`   | `ConfigStore` (writable, secret-aware config) + `ConfigEncryption` protocol + `PassthroughEncryption`. Imported on its own, no extra deps. |
+| (none)     | `BackplaneVault`   | `ConfigStore` (writable, secret-aware config; safe for concurrent stores on one file via locked read-merge-writes) + `ConfigEncryption` protocol + `PassthroughEncryption` + `FileLock` (cross-process advisory lock). Imported on its own, no extra deps. |
 | `Postgres` | `BackplanePostgres`| `PostgresNIO`-backed service key, configuration, migrations. |
 | `OTel`     | `BackplaneOTel`    | `swift-otel` integration: `BootstrapPlan` factory + CLI flags. |
 | `GCP`      | `BackplaneGCP`     | Cloud Trace tracer/exporter + Cloud Logging `LogHandler`. |
