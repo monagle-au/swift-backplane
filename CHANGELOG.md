@@ -8,6 +8,23 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+### Documentation
+
+- Rewrote the `Backplane` and `BackplanePostgres` DocC catalogs for the
+  current API — they still documented the pre-refactor
+  `ServiceRegistry` / `ServiceValues` / `ConcreteServiceEntry` model and
+  the pre-1.1 `postgresKey` / `postgresServiceEntry()` names.
+- Added a DocC catalog for `BackplaneVault`: core model, reading &
+  writing (including the 1.3.0 no-lost-keys concurrency guarantee),
+  scoping, encryption backends with a KMS sketch, and `FileLock` usage
+  for consumer-owned files.
+- All six `generate-documentation` targets now build warning-clean;
+  fixed broken symbol links in source doc comments across every target.
+- Backfilled the missing `1.1.1` entry below; corrected stale examples
+  in README and CLAUDE.md; aligned `docs/design/backplane.md` with the
+  as-built API and marked the unshipped §7 vault/Backplane integration
+  as planned in `docs/design/backplane-vault.md`.
+
 ## [1.3.0] — 2026-07-21
 
 A backward-compatible release: `BackplaneVault`'s `ConfigStore` is now
@@ -69,6 +86,30 @@ is untouched.
   still gets its `shutdown()`. Consumers can now build retry-with-backoff
   supervisors for boot failures entirely on the public API
   (`stateStream(of:)` + `recover(at:)`), as the design note intends.
+
+## [1.1.1] — 2026-07-09
+
+A patch release: fixes `ConfigStore` write-through for dotted scopes.
+
+### Fixed
+
+- **`ConfigStore` write-through for dotted scopes** —
+  `ConfigStoreBackend` built in-memory keys inconsistently: the
+  file-load path and the scoped reader split the scope on `.` (a scope
+  may itself be a dotted identifier, e.g. `"service.database"`), but
+  `setValue`, `removeValue`, and `reload`'s clear-removed-keys loop
+  kept the scope as a single key component. Any store with a dotted
+  scope wrote values at keys the scoped reader could never match — the
+  JSON file was always written correctly, so writes were invisible to
+  same-process readers until the file was re-read at the next startup.
+  All key construction now goes through a single
+  `absoluteKey(scope:key:)` helper with the load path's semantics.
+
+### CI
+
+- The release workflow is now idempotent on re-tagged versions —
+  re-pushing a tag updates the existing GitHub Release instead of
+  failing on the duplicate create.
 
 ## [1.1.0] — 2026-06-06
 
@@ -177,7 +218,7 @@ follow strict SemVer.
   framework wires `RootCommand` (an `AsyncParsableCommand`) and
   drives the `ServiceGroup`.
 - **`BackplaneCommand`** — protocol over `AsyncParsableCommand`
-  carrying `requiredServices: [AnyServiceKey]` and
+  carrying `requiredServices: [PartialKeyPath<Services>]` and
   `bootstrap(config:environment:)` returning a `BootstrapPlan`.
   `PersistentCommand` and `TaskCommand` capture the two common
   shapes (services run until signal vs. services run alongside a
@@ -273,6 +314,7 @@ follow strict SemVer.
 
 [Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v1.3.0...HEAD
 [1.3.0]: https://github.com/monagle-au/swift-backplane/compare/v1.2.0...v1.3.0
-[1.2.0]: https://github.com/monagle-au/swift-backplane/compare/v1.1.0...v1.2.0
+[1.2.0]: https://github.com/monagle-au/swift-backplane/compare/v1.1.1...v1.2.0
+[1.1.1]: https://github.com/monagle-au/swift-backplane/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/monagle-au/swift-backplane/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/monagle-au/swift-backplane/releases/tag/v1.0.0

@@ -11,7 +11,7 @@ harness for CLI-driven services.
 ```bash
 swift build
 swift test
-swift test --traits Postgres,OTel,GCP,KeyfileEncryption   # everything
+swift test --traits Postgres,OTel,GCP,KeyfileEncryption,Macros   # everything
 ```
 
 Requires Swift 6.2+, macOS 15+.
@@ -22,8 +22,9 @@ Requires Swift 6.2+, macOS 15+.
 
 **`ServiceGraph`** — actor managing the live entry set. Coordinates
 boot (factory + start), blue-green replacement (`restart(at:)`), hot
-reload (`reload(at:)`), and shutdown. Boots only the transitive
-closure of the boot roots. Failure policies partition per-subgroup.
+reload (`reload(at:)`), cold re-boot of `.failed` entries
+(`recover(at:)`), and shutdown. Boots only the transitive closure of
+the boot roots. Failure policies partition per-subgroup.
 
 **`EntryDescriptor`** — value-type declaration of one entry. Carries
 `id`, factory closure `(ServiceContext) async throws -> any ManagedService`,
@@ -72,7 +73,7 @@ for `.core` and `.integrations`.
 
 **`BackplaneCommand`** — protocol over `AsyncParsableCommand` with
 `requiredServices: [PartialKeyPath<Services>]` and
-`bootstrap(config:environment:) -> BootstrapPlan`.
+`bootstrap(config:environment:) async throws -> BootstrapPlan`.
 
 - `PersistentCommand` — runs services until signal. No `execute`.
 - `TaskCommand` — services come up, `execute(with: ServiceContext)`
