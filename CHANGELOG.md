@@ -8,6 +8,13 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-07-23
+
+A documentation-only release: no code changes (every source diff is
+doc-comment text). Cut so the corrected DocC catalogs — including the
+new `BackplaneVault` catalog — ship with the package and publish from
+the tag.
+
 ### Documentation
 
 - Rewrote the `Backplane` and `BackplanePostgres` DocC catalogs for the
@@ -312,7 +319,8 @@ follow strict SemVer.
 - Swift 6.2+
 - macOS 15+
 
-[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/monagle-au/swift-backplane/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/monagle-au/swift-backplane/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/monagle-au/swift-backplane/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/monagle-au/swift-backplane/compare/v1.1.0...v1.1.1
