@@ -99,8 +99,11 @@ read-time access via the normal `ConfigReader`).
 
 None unless they opt in. The introduction of BackplaneVault leaves the
 existing `ConfigReader` story unchanged for consumers that don't
-import it. The Backplane `ServiceContext` gains an optional
-`configStore: ConfigStore?` property (see §7 below) that is `nil` for
+import it. As part of the (future) Backplane integration, the
+Backplane `ServiceContext` would gain an optional
+`configStore: ConfigStore?` property (see §7 below — not yet
+implemented; the vault target currently has no dependency on, or
+integration with, the `Backplane` library) that is `nil` for
 consumers without BackplaneVault.
 
 ---
@@ -374,7 +377,7 @@ dependencies: [
     // ... existing dependencies ...
     .package(
         url: "https://github.com/apple/swift-crypto.git",
-        from: "3.10.0"
+        from: "4.0.0"
     ),
 ],
 targets: [
@@ -382,7 +385,7 @@ targets: [
     .target(
         name: "BackplaneVault",
         dependencies: [
-            "Backplane",
+            // Note: deliberately NO dependency on "Backplane" — §7.4.
             .product(name: "Configuration", package: "swift-configuration"),
             .product(
                 name: "Crypto",
@@ -759,7 +762,13 @@ the protocol design admits it.
 
 ### 7.1 `ServiceContext.configStore`
 
-Backplane's `ServiceContext` (see `backplane.md` §2.7) gains
+> **Status:** §7 as a whole is the *planned* Backplane integration —
+> none of it has shipped. As of 1.3.0 there is no
+> `ServiceContext.configStore`, no `ConfigStore.changes` stream, and
+> no `watch:` constructor; BackplaneVault stands alone on
+> swift-configuration (§7.4 is the part that is true today).
+
+Backplane's `ServiceContext` (see `backplane.md` §2.7) would gain
 an optional property:
 
 ```swift
@@ -808,7 +817,6 @@ struct MyApp: BackplaneApplication {
         )
     }
 
-    @ServiceGraphBuilder
     static func services() -> [EntryDescriptor] {
         // Descriptors as usual; ServiceContext.configStore is
         // populated automatically by the graph when a vault is
@@ -826,9 +834,10 @@ up; it's `ConfigStore` (non-optional) for a consumer that has.
 
 ### 7.3 Hot-reload integration with `HotReloadable`
 
-`backplane.md` §7 defines `HotReloadable.reload(config:)` — services
-that support in-place reconfiguration take a fresh `ConfigReader` and
-apply it atomically. BackplaneVault closes the loop:
+`backplane.md` §7 defines `HotReloadable.reload()` (with a
+config-taking form to follow) — services that support in-place
+reconfiguration re-read fresh configuration and apply it atomically.
+BackplaneVault would close the loop:
 
 ```swift
 extension ConfigStore {
@@ -984,9 +993,10 @@ Open sub-questions:
   back? Lean: retain old reader, log + yield a failure on a separate
   stream.
 
-**Lean:** ship in v1 without the watcher; ship watcher in v1.1 once
-the platform-abstraction story is settled. `changes` stream still
-exists in v1 but yields only on explicit `reload()`.
+**Lean:** ship without the watcher; ship it once the
+platform-abstraction story is settled. (As of 1.3.0, neither the
+watcher nor the `changes` stream has shipped — both arrive with the
+§7 Backplane integration.)
 
 ### 9.2 Key rotation
 

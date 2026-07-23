@@ -136,8 +136,10 @@ so admin/observability surfaces can show "this entry is mid-deploy."
 /// Each registered entry in a ``ServiceGraph`` has an associated handle.
 /// The handle is ``Sendable`` and safe to capture into closures.
 public protocol ServiceLifecycleHandle: Sendable {
-    /// Current entry-level state.
-    var state: ServiceState { get async }
+    /// Current entry-level state. Synchronous: the per-entry state
+    /// lives behind a `Mutex`, not the graph actor, so no actor hop
+    /// is required (§6, "Per-entry mutex pattern, generalised").
+    var state: ServiceState { get }
 
     /// State transitions. Each call returns a fresh ``AsyncStream``.
     /// The first element is the current state (replay-first semantic).
@@ -198,7 +200,7 @@ extension ManagedService {
 
 Two important things this protocol does *not* require:
 
-- It does not require a `reload(config:)` method. Hot reload is a separate,
+- It does not require a `reload()` method. Hot reload is a separate,
   opt-in protocol (§7).
 - It does not require any health-check or readiness method. The contract
   is: `start()` returns ⇒ ready to receive requests. Services that need
@@ -284,68 +286,68 @@ replacement machinery.
 /// Service registry. Owns entry lifecycles, drives the inner
 /// ``ServiceGroup``, exposes typed lookup.
 ///
-/// Constructed from a list of ``EntryDescriptor``s — typically via
-/// a ``@ServiceGraphBuilder`` block. After construction the entry set
-/// is fixed for the process lifetime.
+/// Constructed from a list of ``EntryDescriptor``s. After
+/// construction the entry set is fixed for the process lifetime.
+/// Typed keypath resolution lives on ``ServiceContext``; the graph's
+/// own surface is `ServiceKey<T>`/`String`-addressed.
 public actor ServiceGraph {
     /// Construct the graph from a fixed descriptor set.
     ///
     /// `throws` because construction performs eager validation: every
-    /// declared dependency must point at a registered keypath, and the
+    /// declared dependency must point at a registered entry, and the
     /// dependency graph must be acyclic. Both failures throw
     /// ``ServiceGraphError`` synchronously, before any service runs.
     /// See §11 for the spike-validated rationale.
     public init(
         descriptors: [EntryDescriptor],
-        subgroupPolicies: [SubgroupTag: SubgroupPolicy] = [:],
-        logger: Logger,
-        config: ConfigReader? = nil
+        logger: Logger? = nil,
+        config: ConfigReader? = nil,
+        shutdownTimeout: Duration = .seconds(30),
+        subgroupPolicies: [SubgroupTag: SubgroupPolicy] = [:]
     ) throws
 
     /// Boot the transitive closure of `roots` to terminal-or-running.
     ///
-    /// Pass `nil` (the default) to boot every registered entry —
-    /// equivalent to the 1.0 `ApplicationRunner` behaviour. Pass a list
-    /// of keypath identifiers (typically a command's `requiredServices`)
-    /// to prune to that subset. Unknown root identifiers throw
-    /// ``ServiceGraphError/unknownRoot`` — stringified IDs are validated
-    /// eagerly so typos surface immediately rather than silently
-    /// dropping services.
-    public func boot(roots: [String]? = nil) async throws
+    /// Pass `nil` (the default) to boot every registered entry.
+    /// Pass a list of erased keys (typically a command's
+    /// `requiredServices`) to prune to that subset. Unknown roots
+    /// throw ``ServiceGraphError/unknownRoot`` — validated eagerly so
+    /// typos surface immediately rather than silently dropping
+    /// services.
+    public func boot(roots: [AnyServiceKey]? = nil) async throws
 
     /// Synchronous entry lookup. Returns the *currently-active*
-    /// generation's handle, or nil if the entry has no live handle
-    /// (never-booted, stopped, or failed).
-    nonisolated public func resolve<T>(
-        _ keyPath: KeyPath<Services, T>
+    /// generation's resolved value, or nil if the entry has no live
+    /// handle (never-booted, stopped, or failed).
+    nonisolated public func resolve<T: Sendable>(
+        _ key: ServiceKey<T>
     ) -> T?
 
     /// Async entry lookup that waits for the entry to reach
-    /// resolution-ready. See §5 for the boot-time semantics.
-    public func require<T>(
-        _ keyPath: KeyPath<Services, T>
+    /// resolution-ready, optionally bounded by `timeout`. See §5 for
+    /// the boot-time semantics.
+    nonisolated public func requireService<T: Sendable>(
+        _ key: ServiceKey<T>,
+        timeout: Duration? = nil
     ) async throws -> T
 
-    /// First running entry whose handle conforms to ``T``.
-    nonisolated public func firstService<T>(
-        conformingTo type: T.Type
-    ) -> T?
-
     /// Subscribe to state transitions for an entry.
-    public func stateStream(
-        of keyPath: AnyKeyPath
-    ) -> AsyncStream<ServiceState>
+    nonisolated public func stateStream(of id: String) -> AsyncStream<ServiceState>
 
     /// Trigger replacement of an entry, using its declared strategy.
-    public func restart(at keyPath: AnyKeyPath) async
+    public func restart(at id: String) async
 
     /// Trigger a hot reload (if supported) — no new generation, the
     /// existing service applies new configuration in place.
     /// Falls back to ``restart(at:)`` if the service does not
     /// conform to ``HotReloadable``.
-    public func reload(at keyPath: AnyKeyPath) async
+    public func reload(at id: String) async
 
-    public func state(of keyPath: AnyKeyPath) -> ServiceState
+    /// Cold re-boot of a `.failed` entry — the missing exit edge from
+    /// `.failed` (added in 1.2.0; see §11.11).
+    public func recover(at id: String) async
+
+    nonisolated public func state(of id: String) -> ServiceState
 }
 
 extension ServiceGraph: ServiceLifecycle.Service {
@@ -362,31 +364,35 @@ outer `ServiceGroup` owned by `ApplicationRunner`. Two levels.
 ### 2.6 `EntryDescriptor` and the factory
 
 ```swift
-/// Type-erased descriptor of one declared entry.
+/// Type-erased descriptor of one declared entry. Stored fields are
+/// `package` — consumers construct descriptors via the public
+/// initialisers (identity / `passive:` / `factory:as:`, each in a
+/// bare-key and a keypath flavour).
 public struct EntryDescriptor: Sendable {
-    /// Entry keypath — identity. Nil for anonymous entries (§3).
-    public let keyPath: AnyKeyPath?
-
-    /// Leaf name — drives log labels, config-file paths, admin IDs.
-    public let leafName: String
-
-    /// Subgroup tag. Defaults to ``SubgroupTag/core``. See §4.
-    public let subgroup: SubgroupTag
-
-    /// Declared dependencies (other entry keypaths this factory or
-    /// service will call ``ServiceContext/requireService(_:)`` for).
-    /// Drives topological-sort cycle detection. Optional — services
-    /// that don't cross-resolve omit this.
-    public let dependencies: [AnyKeyPath]
+    /// Entry identity — drives log labels, restart lookup, and the
+    /// entry's `ConfigReader` scope.
+    package let id: String
 
     /// Factory closure. Called at first boot and at every replacement.
-    /// Receives the per-entry ``ConfigReader`` and ``ServiceContext``.
-    public let factory: @Sendable (
-        ConfigReader, ServiceContext
-    ) async throws -> any ManagedService
+    /// Receives the entry's ``ServiceContext`` (config travels inside
+    /// it — `context.requireConfig()`).
+    package let factory: @Sendable (ServiceContext) async throws -> any ManagedService
 
-    /// Optional in-memory configuration layer.
-    public let defaultConfig: [String: any Sendable]?
+    /// How the graph interprets `.unconfigured` for dependent callers.
+    package let configuration: ConfigurationRequirement
+
+    /// Subgroup tag. Defaults to ``SubgroupTag/core``. See §4.
+    package let subgroup: SubgroupTag
+
+    /// Declared dependencies (other entries this factory will call
+    /// ``ServiceContext/requireService(_:)`` for). Drives pruning and
+    /// cycle detection. Optional — services that don't cross-resolve
+    /// omit this.
+    package let dependencies: [AnyServiceKey]
+
+    /// Projects the lifecycled managed instance to the key's resolved
+    /// value at resolution time (see "Projection" below).
+    package let project: @Sendable (any ManagedService) -> any Sendable
 }
 ```
 
@@ -473,30 +479,36 @@ and the one-closure cost buys static conformance checking.
 /// Context passed to a service's factory closure, and available at
 /// runtime for cross-service resolution.
 public final class ServiceContext: Sendable {
-    /// Entry identifier — the keypath leaf as a string.
+    /// Entry identifier.
     public let entryID: String
 
     /// Pre-scoped logger.
     public let logger: Logger
 
-    /// Per-entry configuration reader (layered: per-entry file >
-    /// per-entry default > project-wide).
-    public let config: ConfigReader
+    /// Application configuration reader. `nil` when the graph was
+    /// constructed without one (e.g. graph-machinery unit tests);
+    /// `requireConfig()` is the throwing non-optional accessor.
+    /// Factories self-scope: `context.requireConfig().scoped(to: "postgres")`.
+    public let config: ConfigReader?
+    public func requireConfig() throws -> ConfigReader
 
     /// Lifecycle handle for this entry.
     public let lifecycle: any ServiceLifecycleHandle
 
-    /// Resolve a service by keypath. Returns nil if not running.
-    public func service<T>(_ keyPath: KeyPath<Services, T>) -> T?
+    /// Self-report channel for health (see §6).
+    public let health: any ServiceHealthReporter
 
-    /// Resolve a required service, waiting if necessary. See §5.
-    public func requireService<T>(
-        _ keyPath: KeyPath<Services, T>
+    /// Resolve a service by key or keypath. Returns nil if not running.
+    public func service<T: Sendable>(_ key: ServiceKey<T>) -> T?
+    public func service<T: Sendable>(_ keyPath: KeyPath<Services, ServiceKey<T>>) -> T?
+
+    /// Resolve a required service, waiting if necessary (optionally
+    /// bounded by `timeout`). See §5.
+    public func requireService<T: Sendable>(
+        _ key: ServiceKey<T>, timeout: Duration? = nil
     ) async throws -> T
-
-    public func firstService<T>(conformingTo type: T.Type) -> T?
-    public func requireFirstService<T>(
-        conformingTo type: T.Type
+    public func requireService<T: Sendable>(
+        _ keyPath: KeyPath<Services, ServiceKey<T>>, timeout: Duration? = nil
     ) async throws -> T
 }
 ```
@@ -524,7 +536,6 @@ public protocol BackplaneApplication: Sendable {
 
     /// Produce the full set of service descriptors the app may need.
     /// Commands select which subset boots.
-    @ServiceGraphBuilder
     static func services() -> [EntryDescriptor]
 
     static func configReader(
@@ -773,34 +784,27 @@ public struct SubgroupPolicy: Sendable {
         case degraded
     }
 
-    public enum CompletionMode: Sendable {
-        /// Successful completion shuts down the outer process.
-        case shutdownGroup
-        /// Successful completion is ignored; siblings continue.
-        case ignore
-        /// Successful completion shuts down only this subgroup.
-        case shutdownSubgroup
-    }
-
     public let failure: FailureMode
-    public let completion: CompletionMode
 
     /// Whether the graph honours ``ServiceGraph/restart(at:)`` requests
     /// for entries in this subgroup. Entries in non-restartable
-    /// subgroups (e.g. one-shot task subgroups) cannot be hot-restarted.
+    /// subgroups cannot be hot-restarted.
     public let restartable: Bool
 
     public static let core = SubgroupPolicy(
-        failure: .failFast, completion: .ignore, restartable: false
+        failure: .failFast, restartable: false
     )
     public static let integrations = SubgroupPolicy(
-        failure: .degraded, completion: .ignore, restartable: true
-    )
-    public static let task = SubgroupPolicy(
-        failure: .failFast, completion: .shutdownGroup, restartable: false
+        failure: .degraded, restartable: true
     )
 }
 ```
+
+(A `CompletionMode` axis — "what happens when an entry in this
+subgroup completes successfully" — was part of the original sketch
+but is deferred until a `ManagedTaskService` story needs it; see
+§11.14. As-built, `SubgroupPolicy` carries only `failure` and
+`restartable`.)
 
 ### Implementation
 
@@ -818,26 +822,24 @@ first.
 ### Example
 
 ```swift
-@ServiceGraphBuilder
 static func services() -> [EntryDescriptor] {
-    // Core — fail-fast, not restartable.
-    service(\.database,        label: "postgres") { ... }
-    service(\.metricsExporter, label: "metrics")  { ... }
+    [
+        // Core — fail-fast, not restartable.
+        EntryDescriptor(\.database)        { ... },
+        EntryDescriptor(\.metricsExporter) { ... },
 
-    // Integrations — degraded mode, restartable.
-    service(\.slackWebhook, label: "slack",   subgroup: "integrations") { ... }
-    service(\.s3Backup,     label: "s3",      subgroup: "integrations") { ... }
-
-    // One-shot — completion shuts the group down.
-    service(\.migration,    label: "migrate", subgroup: "task") { ... }
+        // Integrations — degraded mode, restartable.
+        EntryDescriptor(\.slackWebhook, subgroup: "integrations") { ... },
+        EntryDescriptor(\.s3Backup,     subgroup: "integrations") { ... },
+    ]
 }
 ```
 
 ### Progressive disclosure
 
 If you never mention subgroups, everything lands in `.core` with
-`failFast` policy — the the predecessor design behaviour. The keyword `subgroup:`
-on `service()` and the `subgroupPolicies:` argument on `ServiceGraph.init`
+`failFast` policy — the the predecessor design behaviour. The `subgroup:`
+argument on `EntryDescriptor` and the `subgroupPolicies:` argument on `ServiceGraph.init`
 are both optional. Small services pay zero ceremony for the feature.
 
 ---
@@ -852,18 +854,17 @@ extension ServiceContext {
     /// reached ``.running`` (first boot still in progress, or no
     /// configuration), or has reached a terminal state
     /// (``.stopped`` / ``.failed``).
-    public func service<T>(_ keyPath: KeyPath<Services, T>) -> T?
+    public func service<T: Sendable>(
+        _ keyPath: KeyPath<Services, ServiceKey<T>>
+    ) -> T?
 
     /// Async resolve that waits for the entry to reach
-    /// resolution-ready. Throws ``ServiceGraphError/missingService``
-    /// if the entry settles into a terminal non-running state.
-    public func requireService<T>(
-        _ keyPath: KeyPath<Services, T>
-    ) async throws -> T
-
-    public func firstService<T>(conformingTo type: T.Type) -> T?
-    public func requireFirstService<T>(
-        conformingTo type: T.Type
+    /// resolution-ready. Throws ``ServiceGraphError`` if the entry is
+    /// unknown, settles into a terminal non-running state, or exceeds
+    /// the optional `timeout`.
+    public func requireService<T: Sendable>(
+        _ keyPath: KeyPath<Services, ServiceKey<T>>,
+        timeout: Duration? = nil
     ) async throws -> T
 }
 ```
@@ -1052,7 +1053,7 @@ The two protocols intentionally do not share a type:
 | Direction                  | Read                                | Write                                  |
 | Access                     | Anyone via `ServiceContext.lifecycle` of any entry | Only the entry's own service via `ServiceContext.health` |
 | Methods                    | `state`, `stateStream()`, `requestRestart()` | `markDegraded(fault:)`, `markHealthy()` |
-| Concurrency                | Mixed (async for `state`/`requestRestart`, sync for `stateStream`) | `nonisolated` |
+| Concurrency                | Mixed (sync for `state`/`stateStream` via the per-entry mutex, async for `requestRestart`) | `nonisolated` |
 
 The asymmetry — observer is mixed, reporter is fully `nonisolated` — is
 deliberate: services report from hot paths and shouldn't take actor
@@ -1210,12 +1211,16 @@ according to whatever policy fits. This is deliberately not a
 framework feature — retry policy is an operational concern with too
 many local optima for one default to be right.
 
-After a configurable threshold of consecutive failed replacement
-attempts (default: 5 within a 10-minute window), the graph transitions
-the entry to `.failed`. This is the only state from which automatic
-recovery is *not* attempted; `.failed` requires an explicit operator
-action. The threshold values are constants in the graph and not part
-of the public surface in v1 — see §11.12.
+As-built, the graph does not escalate on its own: failed replacement
+attempts land the entry in `.degraded` (the old instance keeps
+serving where the strategy allows), and `.degraded` it stays until an
+operator or supervisor acts. `.failed` arises only from a boot-time
+or `recover(at:)` factory/`start()` failure — never from a failed
+replacement. (`ServiceFault` carries a `consecutiveCount` field so a
+threshold-based escalation could be added later without changing the
+surface; the original sketch's automatic `.degraded` → `.failed`
+promotion is unimplemented — see §11.12.) The exit edge from
+`.failed` is the explicit `recover(at:)` (§11.11).
 
 ### The `ReplacementStrategy` enum
 
@@ -1264,21 +1269,27 @@ declare `.coldRestart` explicitly.
 ///
 /// When ``ServiceGraph/reload(at:)`` is called for an entry whose
 /// service conforms to ``HotReloadable``, the graph calls
-/// ``reload(config:)`` instead of starting a new generation. The
+/// ``reload()`` instead of starting a new generation. The
 /// service is responsible for atomic application of the new config.
 ///
-/// If ``reload(config:)`` throws, the graph transitions the entry to
-/// ``ServiceState/degraded`` and (depending on the service's
-/// ``replacementStrategy``) may schedule a blue-green replacement.
+/// If ``reload()`` throws, the graph transitions the entry to
+/// ``ServiceState/degraded`` and leaves the existing instance in
+/// place; escalation to blue-green is the operator's call via
+/// ``ServiceGraph/restart(at:)``.
 ///
-/// Thread safety: ``reload(config:)`` runs while the service is
+/// Thread safety: ``reload()`` runs while the service is
 /// ``.running``. If the service is an actor, the call is actor-isolated.
 /// If the service is a `Sendable` class, the graph serialises the call
 /// through its own actor.
 public protocol HotReloadable: ManagedService {
-    func reload(config: ConfigReader) async throws
+    func reload() async throws
 }
 ```
+
+(As-built, `reload()` takes no parameter: services capture their
+config source and re-read it inside `reload()`. The
+`reload(config: ConfigReader)` form sketched originally arrives
+with the production `ConfigReader` integration.)
 
 `HotReloadable` is independent of `ReplacementStrategy`. A service can
 declare both — `replacementStrategy = .hotReload` says "config changes
@@ -1551,18 +1562,33 @@ pattern.
 
 ```swift
 public enum ServiceGraphError: Error, Sendable {
-    /// No entry registered at the keypath.
-    case missingService(keyPath: String, expectedType: String)
+    /// No entry registered under the id.
+    case missingService(id: String, expectedType: String)
 
-    /// No registered service conforms to the requested protocol type.
-    case missingConformer(type: String)
+    /// An entry's lifecycle has transitioned to a terminal state
+    /// while a caller was awaiting resolution.
+    case entryTerminated(id: String, state: ServiceState)
+
+    /// The entry resolved, but its instance is not the expected type.
+    case typeMismatch(id: String, expectedType: String)
+
+    /// `requireService(_:timeout:)` exceeded its bound.
+    case timedOut(id: String, expectedType: String, after: Duration)
+
+    /// A declared dependency points at an unregistered entry.
+    case unknownDependency(id: String, referencedBy: String)
 
     /// A cyclic dependency was detected at graph construction.
     case cyclicDependency(path: [String])
 
-    /// An entry's lifecycle has transitioned to a terminal state
-    /// while a caller was awaiting resolution.
-    case entryTerminated(keyPath: String, state: ServiceState)
+    /// A boot root does not name a registered entry.
+    case unknownRoot(id: String)
+
+    /// A `.failFast` subgroup faulted during boot.
+    case subgroupBootFailed(tag: SubgroupTag, faulted: [String])
+
+    /// `requireConfig()` on a graph constructed without a reader.
+    case missingConfigReader(entryID: String)
 }
 ```
 
@@ -1603,7 +1629,7 @@ struct App: BackplaneApplication {
 
 struct Serve: PersistentCommand {
     typealias App = App
-    var requiredServices: [AnyKeyPath] { [\Services.http] }
+    var requiredServices: [PartialKeyPath<Services>] { [\.http] }
 }
 ```
 
@@ -1640,8 +1666,9 @@ The patterns Acumen needs are all expressible:
   Backplane.
 - **Subgroups for distinct failure policies** — `core` / `integrations` /
   `task` patterns map cleanly.
-- **Conformance-based lookup** — `firstService(conformingTo:)` matches
-  Acumen's `runningRegisterables` use case.
+- **Conformance-based lookup** — a `firstService(conformingTo:)` would
+  match Acumen's `runningRegisterables` use case (not implemented in
+  v1; keyed resolution has covered every consumer so far).
 
 ### Satellite targets
 
