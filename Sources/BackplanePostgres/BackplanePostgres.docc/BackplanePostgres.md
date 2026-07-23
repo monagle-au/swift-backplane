@@ -1,6 +1,6 @@
 # ``BackplanePostgres``
 
-PostgresNIO-backed service key, configuration, migrations, and
+PostgresNIO-backed service, configuration, migrations, and
 ergonomic query helpers for Backplane applications.
 
 ## Overview
@@ -9,8 +9,11 @@ ergonomic query helpers for Backplane applications.
 to bring `postgres-nio` into the dependency graph and link this
 target. It contributes:
 
-- A typed ``PostgresServiceKey`` so commands declare a Postgres
-  dependency the same way as any other service.
+- ``BackplanePostgresService`` — a `ManagedService` wrapper around
+  `PostgresClient` — plus the `Services.postgres` key and the
+  ``postgresEntryDescriptor(subgroup:dependencies:)`` factory, so
+  commands declare a Postgres dependency the same way as any other
+  service (`\.postgres`).
 - A configuration builder (`PostgresClient.Configuration(config:)`)
   that maps a `ConfigReader` scope onto the full set of
   postgres-nio knobs — connection mode (host/port or unix socket),
@@ -31,34 +34,15 @@ target. It contributes:
 
 ### Service registration
 
-- ``PostgresServiceKey``
-- ``postgresServiceEntry()``
+- ``BackplanePostgresService``
+- ``postgresEntryDescriptor(subgroup:dependencies:)``
 
 ### Configuration
 
-- The ``PostgresNIO/PostgresClient/Configuration/init(config:)``
-  initializer maps a `ConfigReader` scope onto the postgres-nio
-  configuration.
-- The `applyPoolAndTimeoutOverrides(from:)` method layers pool
-  + timeout knobs on top of an existing configuration.
+- ``PostgresNIO/PostgresClient/Configuration/init(config:)``
+- ``PostgresNIO/PostgresClient/Configuration/applyPoolAndTimeoutOverrides(from:)``
 
 ### Migrations
 
 - ``PostgresMigration``
 - ``PostgresMigrator``
-
-### Helpers
-
-- The `PostgresData.optional(...)` extensions map optional Swift
-  values to `PostgresData` (`.null` when nil).
-- The `PostgresQuery.multiValueRowQuery(...)` helper builds a
-  parameterised multi-row INSERT.
-
-### Error reflection (DEBUG only)
-
-- `PGReflectableError` and `PGReflectedError` wrap PostgresNIO
-  errors with stable codes for diagnostic output.
-- `logUnwrappedPostgreSQLErrors(logger:operation:)` is a
-  pass-through wrapper that logs and rethrows any reflected
-  error in DEBUG builds; release builds compile away the
-  overhead.

@@ -21,10 +21,10 @@ Three magic keys make the trace ↔ log link work:
 - `logging.googleapis.com/trace_sampled` — `"true"` / `"false"`.
 
 The `BackplaneGCP` target writes those keys for you when you use
-``GCPLogHandler`` (or ``StructuredLogHandler`` with the
-``StructuredLogProfile/gcp(projectID:)`` profile) **and**
-something has populated ``LoggingTraceContext`` on the active
-``ServiceContext``. ``GCPTracer`` does the population
+``GCPLogHandler`` (or `StructuredLogHandler` with the
+``Backplane/StructuredLogProfile/gcp(projectID:)`` profile) **and**
+something has populated `LoggingTraceContext` on the active
+`ServiceContext`. ``GCPTracer`` does the population
 automatically; other tracers can do it via a
 `Logger.MetadataProvider` or a per-span shim.
 
@@ -62,9 +62,9 @@ struct Serve: PersistentCommand {
 
     @OptionGroup var logging: LoggingOptions
 
-    var requiredServices: [any ServiceKey.Type] { [] }
+    var requiredServices: [PartialKeyPath<Services>] { [] }
 
-    func bootstrap(config: ConfigReader, environment: Environment) -> BootstrapPlan {
+    func bootstrap(config: ConfigReader, environment: Environment) async throws -> BootstrapPlan {
         var plan = BootstrapPlan()
         plan.logHandlerFactory = BackplaneGCP.cloudRunOrStream.asFactory
         plan.logLevel = logging.resolvedLogLevel
@@ -75,7 +75,7 @@ struct Serve: PersistentCommand {
 
 The selector reads `K_SERVICE` / `CLOUD_RUN_JOB` at bootstrap
 time. On a developer's terminal these are absent, so the fallback
-``BackplaneLogging/stream`` is used. In production on Cloud Run
+`BackplaneLogging.stream` is used. In production on Cloud Run
 they're injected automatically and ``GCPLogHandler`` takes over.
 
 ## Wire up tracing
@@ -94,26 +94,29 @@ struct MyApp: BackplaneApplication {
         await RootCommand.main()
     }
 
-    static func configure(_ services: inout ServiceRegistry) { ... }
+    static func services() -> [EntryDescriptor] { [ ... ] }
 }
 ```
 
-``BackplaneApplication/bootstrapGCPTracing(projectID:)`` reads
+``Backplane/BackplaneApplication/bootstrapGCPTracing(projectID:)`` reads
 `GOOGLE_CLOUD_PROJECT` from the environment by default — Cloud
 Run injects it for every service. It installs ``GCPTracer`` on
 the global instrumentation system and starts an unstructured
 flush task that drains spans every 5 seconds.
 
-`bootstrapGCPTracing` routes through ``BootstrapCoordinator``, so
-a downstream ``BackplaneCommand/bootstrap(config:environment:)``
-won't try to re-install tracing.
+`bootstrapGCPTracing` installs the tracer directly on the global
+instrumentation system — it does **not** route through
+`BootstrapCoordinator`. Call it once, before any command whose
+`BackplaneCommand.bootstrap(config:environment:)` plan would
+also install an instrument; a second instrumentation bootstrap
+crashes the process.
 
 The tracer:
 
 1. Generates W3C trace IDs / span IDs at every
    `withSpan(_:)` / `startSpan(_:)`.
-2. Writes the IDs into ``LoggingTraceContext`` on the active
-   ``ServiceContext`` so ``GCPLogHandler`` reads them on every
+2. Writes the IDs into `LoggingTraceContext` on the active
+   `ServiceContext` so ``GCPLogHandler`` reads them on every
    log call.
 3. Sends finished spans to ``CloudTraceExporter``, which batches
    them and uploads to `cloudtrace.googleapis.com/v2/...`.
@@ -129,13 +132,13 @@ GOOGLE_CLOUD_PROJECT=my-project
 
 # Application config you set on the service.
 LOG_LEVEL=info
-postgres.unixSocketPath=/cloudsql/my-project:us-central1:db/.s.PGSQL.5432
-postgres.username=app
-postgres.password=...                                  # from Secret Manager
-postgres.database=production
-postgres.pool.maximumConnections=8
-postgres.connectTimeoutSeconds=5
-postgres.statementTimeoutSeconds=10
+POSTGRES_UNIX_SOCKET_PATH=/cloudsql/my-project:us-central1:db/.s.PGSQL.5432
+POSTGRES_USERNAME=app
+POSTGRES_PASSWORD=...                                  # from Secret Manager
+POSTGRES_DATABASE=production
+POSTGRES_POOL_MAXIMUM_CONNECTIONS=8
+POSTGRES_CONNECT_TIMEOUT_SECONDS=5
+POSTGRES_STATEMENT_TIMEOUT_SECONDS=10
 ```
 
 Build a container per the deployment guide and deploy. Cloud
@@ -158,11 +161,12 @@ Run automatically vends a token from the service account.
 For services that already export to OpenTelemetry but want Cloud
 Logging's "view trace" link, use the OTel collector's `googlecloud`
 exporter rather than ``GCPTracer``. The trick is bridging
-trace IDs into ``LoggingTraceContext`` so ``GCPLogHandler`` can
+trace IDs into `LoggingTraceContext` so ``GCPLogHandler`` can
 emit the magic keys. With swift-otel, write a custom
 `Logger.MetadataProvider` that reads the active span and
-populates `LoggingTraceContext` — see the
-``BackplaneOTel/OTelWalkthrough`` for the pattern.
+populates `LoggingTraceContext` — the `BackplaneOTel`
+walkthrough's metadata-provider section shows the hook to build
+on.
 
 ## Project ID corner cases
 
@@ -173,7 +177,7 @@ populates `LoggingTraceContext` — see the
 - **Different projects**: if the trace export writes to a
   different project from the logs (e.g. centralised tracing
   project), pass the trace project explicitly to
-  ``BackplaneApplication/bootstrapGCPTracing(projectID:)`` and
+  ``Backplane/BackplaneApplication/bootstrapGCPTracing(projectID:)`` and
   the log project to ``GCPLogHandler``'s `gcpProjectID`.
 
 ## Local testing
@@ -190,9 +194,9 @@ upload to your real project.
 
 ## Next
 
-- ``Backplane/CloudDeployment`` — the cross-cutting deployment
+- The core `Backplane` catalog's Cloud Deployment article — the cross-cutting deployment
   guide.
-- ``BackplaneOTel`` — for vendor-neutral tracing or
+- `BackplaneOTel` — for vendor-neutral tracing or
   OTel-collector-based pipelines that fan out to Cloud Trace plus
   other backends.
-- ``BackplanePostgres`` — Cloud SQL configuration walkthrough.
+- `BackplanePostgres` — Cloud SQL configuration walkthrough.

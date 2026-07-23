@@ -11,23 +11,23 @@ this target into the dependency graph. It contributes:
 - ``GCPLogHandler`` — a `LogHandler` that emits Cloud Logging's
   structured-JSON shape (severity, timestamp, source location,
   trace correlation magic keys). Implemented as a thin wrapper
-  around ``StructuredLogHandler`` with the
-  ``StructuredLogProfile/gcp(projectID:)`` profile.
+  around `StructuredLogHandler` with the
+  ``Backplane/StructuredLogProfile/gcp(projectID:)`` profile.
 - ``GCPTracer`` — a `Tracer` that exports spans to Cloud Trace's
-  v2 REST API and writes ``LoggingTraceContext`` into the active
-  ``ServiceContext`` so log lines automatically carry the magic
+  v2 REST API and writes `LoggingTraceContext` into the active
+  `ServiceContext` so log lines automatically carry the magic
   keys Cloud Logging needs to render the `view trace` link.
 - A ``BackplaneGCP/cloudRunOrStream`` selector that picks
   Cloud-Logging-shaped JSON when running on Cloud Run / Cloud Run
   Jobs (`K_SERVICE` or `CLOUD_RUN_JOB` env vars) and plain
   stream output everywhere else.
-- ``BackplaneApplication/bootstrapGCPTracing(projectID:)`` — an
+- ``Backplane/BackplaneApplication/bootstrapGCPTracing(projectID:)`` — an
   escape-hatch convenience for installing ``GCPTracer`` directly
   via the static-bootstrap path.
 
 When `K_SERVICE` is set (Cloud Run) or `CLOUD_RUN_JOB` (Cloud
 Run Jobs), Cloud Logging auto-ingests stdout. Combined with
-``GCPTracer`` writing the trace ID into ``LoggingTraceContext``,
+``GCPTracer`` writing the trace ID into `LoggingTraceContext`,
 you get clickable trace links on every log entry without running
 a sidecar collector.
 
@@ -51,8 +51,8 @@ a sidecar collector.
 
 ### Bootstrap helpers
 
-- ``BackplaneApplication/bootstrapGCPTracing(projectID:)``
+- ``Backplane/BackplaneApplication/bootstrapGCPTracing(projectID:)``
 
 ### Profile (extension on core)
 
-- ``StructuredLogProfile/gcp(projectID:)``
+- ``Backplane/StructuredLogProfile/gcp(projectID:)``

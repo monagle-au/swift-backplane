@@ -5,8 +5,8 @@ in a Backplane application.
 
 ## Overview
 
-Backplane treats Postgres as a regular ``ServiceKey``-keyed
-service: declare the dependency, and the framework brings up a
+Backplane treats Postgres as a regular keyed service: declare the
+dependency via `\.postgres`, and the framework brings up a
 `PostgresClient` before your services start. The `Postgres`
 package trait gates the entire integration so apps that don't
 need it don't pull in `postgres-nio`.
@@ -33,6 +33,8 @@ In your `Package.swift`:
 
 ## Register the service
 
+Add the supplied descriptor to your application's `services()`:
+
 ```swift
 import Backplane
 import BackplanePostgres
@@ -42,22 +44,33 @@ struct MyApp: BackplaneApplication {
     typealias RootCommand = AppCommand
     static let identifier = "my-app"
 
-    static func configure(_ services: inout ServiceRegistry) {
-        services.register(PostgresServiceKey.self, entry: postgresServiceEntry())
+    static func services() -> [EntryDescriptor] {
+        [postgresEntryDescriptor()]
     }
 }
 ```
 
-`postgresServiceEntry()` is a ``ConcreteServiceEntry`` configured
-as ``ServiceLifecycleMode/persistent`` with the label `"postgres"`.
-Its build closure reads the `postgres.*` scope of your
-`ConfigReader` (default: process environment variables) and
-constructs a `PostgresClient`.
+``postgresEntryDescriptor(subgroup:dependencies:)`` returns an
+`EntryDescriptor` with id `"postgres"` (subgroup `.core` by
+default). Its factory reads the `postgres.*` scope of your
+`ConfigReader` (default: process environment variables),
+constructs a `PostgresClient`, and wraps it in a
+``BackplanePostgresService`` — the `ManagedService` that spawns
+and cancels the client's run loop for the graph. The key is
+exposed as `Services.postgres`, so commands and factories address
+it as `\.postgres`.
+
+> Note: `Services.postgresKey` still compiles as a deprecated
+> alias for `Services.postgres` (renamed in 1.1.0); it will be
+> removed in 2.0.0.
 
 ## Configuration keys
 
 Read by ``PostgresNIO/PostgresClient/Configuration/init(config:)``
-under the `postgres` scope:
+under the `postgres` scope. With the default
+`EnvironmentVariablesProvider`, each key maps to its
+upper-snake-case env var (`postgres.host` → `POSTGRES_HOST`,
+`postgres.unixSocketPath` → `POSTGRES_UNIX_SOCKET_PATH`, …).
 
 | Key                                       | Type   | Default     | Notes                                            |
 |-------------------------------------------|--------|-------------|--------------------------------------------------|
@@ -67,15 +80,18 @@ under the `postgres` scope:
 | `postgres.host`                           | String | `"localhost"`| Ignored when `unixSocketPath` is set.            |
 | `postgres.port`                           | Int    | `5432`      | Ignored when `unixSocketPath` is set.            |
 | `postgres.unixSocketPath`                 | String | unset       | When set, takes precedence over host/port.       |
-| `postgres.tls.base`                       | enum   | `disable`   | `disable` / `prefer` / `require`.                |
-| `postgres.tls.minimumTLSVersion`          | enum   | unset       | `tlsv1` / `tlsv11` / `tlsv12` / `tlsv13`.        |
-| `postgres.tls.maximumTLSVersion`          | enum   | unset       | Same range.                                      |
-| `postgres.tls.cipherSuites`               | String | unset       | Pass-through to NIOSSL.                          |
+| `postgres.base`                           | enum   | `disable`   | TLS mode: `disable` / `prefer` / `require`.      |
+| `postgres.minimumTLSVersion`              | enum   | unset       | `tlsv1` / `tlsv11` / `tlsv12` / `tlsv13`.        |
+| `postgres.maximumTLSVersion`              | enum   | unset       | Same range.                                      |
+| `postgres.cipherSuites`                   | String | unset       | Pass-through to NIOSSL.                          |
 | `postgres.pool.minimumConnections`        | Int    | (NIO default) |                                                |
 | `postgres.pool.maximumConnections`        | Int    | (NIO default) |                                                |
 | `postgres.pool.connectionIdleTimeoutSeconds` | Int | (NIO default) |                                                |
 | `postgres.connectTimeoutSeconds`          | Int    | (NIO default) |                                                |
 | `postgres.statementTimeoutSeconds`        | Int    | unset       | When set, sent as `statement_timeout` startup parameter (milliseconds). `0` disables explicitly. |
+
+> Note: the TLS keys sit directly at the `postgres.*` scope — not
+> under a `postgres.tls.*` sub-scope.
 
 For Cloud SQL via Cloud Run, the unix-socket path follows GCP's
 convention:
@@ -86,18 +102,22 @@ postgres.unixSocketPath=/cloudsql/<project>:<region>:<instance>/.s.PGSQL.5432
 
 ## Use the client
 
-Inside any command's `execute(with:)` (or service `run()`),
-unwrap the registered client:
+Inside any command's `execute(with:)` (or service factory),
+resolve the service by keypath and drive queries through its
+``BackplanePostgresService/client``:
 
 ```swift
 struct ListUsers: TaskCommand {
     typealias App = MyApp
     static let configuration = CommandConfiguration(commandName: "list-users")
-    var requiredServices: [any ServiceKey.Type] { [PostgresServiceKey.self] }
+    var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
 
-    func execute(with services: ServiceValues) async throws {
-        let pg = services.postgres!
-        let rows = try await pg.query("SELECT id, email FROM users ORDER BY id LIMIT 100", logger: .init(label: "list-users"))
+    func execute(with context: ServiceContext) async throws {
+        let pg = try await context.requireService(\.postgres)
+        let rows = try await pg.client.query(
+            "SELECT id, email FROM users ORDER BY id LIMIT 100",
+            logger: context.logger
+        )
         for try await (id, email) in rows.decode((Int, String).self) {
             print("\(id)\t\(email)")
         }
@@ -105,11 +125,14 @@ struct ListUsers: TaskCommand {
 }
 ```
 
-`services.postgres` returns the `PostgresClient?` registered
-under ``PostgresServiceKey``. Force-unwrapping is safe because
-``BackplaneCommand/requiredServices`` guarantees the service was
-built before `execute` runs — the runner would have failed at
-startup with ``ApplicationError/missingService(key:)`` otherwise.
+`requireService(\.postgres)` returns the
+``BackplanePostgresService`` (its `client` property is the
+`PostgresClient`; `inner` is an alias). Because the command
+declared `\.postgres` in `requiredServices`, the graph boots the
+entry before `execute` runs; `requireService` waits for it to be
+resolution-ready and throws a `ServiceGraphError` — e.g.
+`missingService(id:expectedType:)` for an unregistered key — if
+it cannot resolve.
 
 ## Migrations
 
@@ -138,14 +161,14 @@ Run them via ``PostgresMigrator``:
 struct Migrate: TaskCommand {
     typealias App = MyApp
     static let configuration = CommandConfiguration(commandName: "migrate")
-    var requiredServices: [any ServiceKey.Type] { [PostgresServiceKey.self] }
+    var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
 
-    func execute(with services: ServiceValues) async throws {
-        let logger = ServiceContext.active.logger ?? Logger(label: "migrate")
+    func execute(with context: ServiceContext) async throws {
+        let pg = try await context.requireService(\.postgres)
         try await PostgresMigrator.migrate(
             [CreateUsers()],
-            on: services.postgres!,
-            logger: logger
+            on: pg.client,
+            logger: context.logger
         )
     }
 }
@@ -185,7 +208,7 @@ let query = PostgresQuery.multiValueRowQuery(
     }
 )
 
-try await services.postgres!.query(query, logger: logger)
+try await pg.client.query(query, logger: logger)
 ```
 
 The helper handles placeholder offsets (`$1, $2, $3, $4, …`) and
@@ -210,7 +233,7 @@ the boundary of a request handler:
 
 ```swift
 try await logUnwrappedPostgreSQLErrors(logger: logger) {
-    try await services.postgres!.query(...)
+    try await pg.client.query(...)
 }
 ```
 
@@ -225,21 +248,21 @@ Cloud Run instances are short-lived. Set
 `postgres.pool.maximumConnections` low enough that a 1000-instance
 fanout doesn't exhaust the database (e.g. 5–10), and set
 `postgres.pool.connectionIdleTimeoutSeconds` short (e.g. 30) so
-idle pools don't hold connections during scale-down.
+idle pools don't hold connections during scale-down. As env vars:
 
 ```bash
-postgres.pool.minimumConnections=0
-postgres.pool.maximumConnections=8
-postgres.pool.connectionIdleTimeoutSeconds=30
-postgres.connectTimeoutSeconds=5
-postgres.statementTimeoutSeconds=10
+POSTGRES_POOL_MINIMUM_CONNECTIONS=0
+POSTGRES_POOL_MAXIMUM_CONNECTIONS=8
+POSTGRES_POOL_CONNECTION_IDLE_TIMEOUT_SECONDS=30
+POSTGRES_CONNECT_TIMEOUT_SECONDS=5
+POSTGRES_STATEMENT_TIMEOUT_SECONDS=10
 ```
 
 For Cloud SQL specifically, prefer the unix socket — it bypasses
 the IP-based per-instance quota:
 
 ```bash
-postgres.unixSocketPath=/cloudsql/<project>:<region>:<instance>/.s.PGSQL.5432
+POSTGRES_UNIX_SOCKET_PATH=/cloudsql/<project>:<region>:<instance>/.s.PGSQL.5432
 ```
 
 ## Testing
@@ -262,7 +285,6 @@ let pg = PostgresClient.Configuration(config: config.scoped(to: "postgres"))
 
 ## Next
 
-- ``Backplane`` — the framework's core concepts.
-- ``Backplane/CloudDeployment`` — production deployment notes.
-- ``BackplaneGCP`` — Cloud Logging / Cloud Trace integration when
+- `Backplane` — the framework's core concepts.
+- `BackplaneGCP` — Cloud Logging / Cloud Trace integration when
   running on Cloud SQL + Cloud Run.

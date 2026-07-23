@@ -11,7 +11,7 @@ OpenTelemetry has three subsystems: traces, metrics, and logs.
 single-`Service` lifecycle that owns the export loops. Backplane's
 ``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:)``
 turns CLI flags + an optional configuration closure into a
-``BootstrapPlan`` ready to install.
+`BootstrapPlan` ready to install.
 
 ## Enable the trait
 
@@ -45,9 +45,9 @@ struct Serve: PersistentCommand {
     @OptionGroup var tracing: OTelTracingOptions
     @OptionGroup var metrics: OTelMetricsOptions
 
-    var requiredServices: [any ServiceKey.Type] { [] }
+    var requiredServices: [PartialKeyPath<Services>] { [] }
 
-    func bootstrap(config: ConfigReader, environment: Environment) throws -> BootstrapPlan {
+    func bootstrap(config: ConfigReader, environment: Environment) async throws -> BootstrapPlan {
         try BackplaneOTel.makeBootstrap(
             serviceName: App.identifier,
             tracing: tracing,
@@ -60,13 +60,13 @@ struct Serve: PersistentCommand {
 
 `makeBootstrap` calls `OTel.bootstrap(configuration:)`
 synchronously, which installs every enabled subsystem on its
-respective global. It then marks ``BootstrapCoordinator`` as
+respective global. It then marks `BootstrapCoordinator` as
 having bootstrapped those subsystems so a downstream
-``BackplaneCommand/run()`` doesn't try to install them a second
+`BackplaneCommand.run()` doesn't try to install them a second
 time.
 
 The returned plan carries a single
-``LifecycleService`` — swift-otel's `OTel` runs as a regular
+`LifecycleService` — swift-otel's `OTel` runs as a regular
 service inside the framework's `ServiceGroup`, draining export
 queues until graceful shutdown.
 
@@ -75,9 +75,11 @@ queues until graceful shutdown.
 ```bash
 swift run my-app serve \
     --trace --otel-endpoint=otel-collector:4317 \
-    --metrics --otel-metrics-endpoint=otel-collector:4317 \
-    --otel-service-name=my-app
+    --metrics --otel-metrics-endpoint=otel-collector:4317
 ```
+
+(The service name isn't a flag on these option groups — it's
+supplied programmatically as `serviceName: App.identifier`.)
 
 Per OpenTelemetry's spec, environment variables override CLI
 defaults. Useful for production:
@@ -98,7 +100,7 @@ for the full list.
 Beyond the OTel-spec env vars, the
 ``OTelTracingOptions/merging(from:)`` and
 ``OTelMetricsOptions/merging(from:)`` methods let env vars flow
-through the same ``Configuration/ConfigReader`` an app already
+through the same `ConfigReader` an app already
 uses for its other settings. Pair the option groups with a
 config-driven fallback:
 
@@ -133,7 +135,7 @@ explicitly passed.
 By default `makeBootstrap(logsEnabled: false)` leaves the logging
 subsystem alone — you'll typically combine OTel tracing/metrics
 with `StructuredLogHandler` (vendor-neutral JSON), `GCPLogHandler`
-(``BackplaneGCP``), or `StreamLogHandler` (text).
+(`BackplaneGCP`), or `StreamLogHandler` (text).
 
 To get trace IDs into log lines without OTel taking over the
 whole logger, use `OTel.makeLoggingMetadataProvider()`:
@@ -254,6 +256,6 @@ server) produces spans that:
 
 ## Next
 
-- ``Backplane`` — the bootstrap pipeline these helpers feed into.
-- ``BackplaneGCP`` — when you want the OTel data to land in Cloud
+- `Backplane` — the bootstrap pipeline these helpers feed into.
+- `BackplaneGCP` — when you want the OTel data to land in Cloud
   Trace and the logs in Cloud Logging.
