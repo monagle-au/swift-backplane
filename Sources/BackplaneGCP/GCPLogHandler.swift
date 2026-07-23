@@ -18,11 +18,11 @@ import Logging
 /// (`severity`, `timestamp`, source location, trace, span) and exposes
 /// the remainder as `jsonPayload`. The handler emits exactly that shape.
 ///
-/// This is a thin wrapper around ``StructuredLogHandler`` configured
-/// with the ``StructuredLogProfile/gcp(projectID:)`` profile. Apps that
+/// This is a thin wrapper around `StructuredLogHandler` configured
+/// with the ``Backplane/StructuredLogProfile/gcp(projectID:)`` profile. Apps that
 /// don't need the Cloud Logging dialect should use
-/// ``StructuredLogHandler`` directly with the
-/// ``StructuredLogProfile/plain`` profile.
+/// `StructuredLogHandler` directly with the
+/// `StructuredLogProfile.plain` profile.
 ///
 /// Reference: <https://cloud.google.com/logging/docs/structured-logging>.
 public struct GCPLogHandler: LogHandler {
@@ -36,7 +36,7 @@ public struct GCPLogHandler: LogHandler {
     /// `logging.googleapis.com/trace` field. Cloud Logging requires the
     /// full path `projects/<id>/traces/<traceId>` — the project ID must
     /// be known at log-write time. When `nil`, trace correlation
-    /// fields are suppressed even if a ``LoggingTraceContext`` is
+    /// fields are suppressed even if a `LoggingTraceContext` is
     /// present.
     public let gcpProjectID: String?
 
@@ -50,7 +50,7 @@ public struct GCPLogHandler: LogHandler {
     /// `gcpProjectID` defaults to `GOOGLE_CLOUD_PROJECT` (Cloud Run
     /// injects this automatically). Pass an explicit value when running
     /// outside Cloud Run, or pass `""` to suppress trace correlation
-    /// even when a ``LoggingTraceContext`` is set.
+    /// even when a `LoggingTraceContext` is set.
     public init(
         label: String,
         metadataProvider: Logger.MetadataProvider? = nil,

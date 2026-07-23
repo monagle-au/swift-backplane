@@ -31,7 +31,7 @@ extension BackplaneApplication {
     /// (Datadog, Honeycomb, multiplexed forwarding, …) supply their own
     /// factory or build a custom ``BackplaneLogging/EnvironmentSelector``.
     ///
-    /// Pass a ``Logger/MetadataProvider`` to attach cross-cutting
+    /// Pass a `Logger.MetadataProvider` to attach cross-cutting
     /// metadata (request id, authenticated identity, trace id, …) to
     /// every log line emitted by every `Logger` constructed after this
     /// call. Provider state is typically read from `TaskLocal` values

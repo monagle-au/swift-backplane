@@ -10,18 +10,18 @@ import Configuration
 
 /// Opinionated `ParsableArguments` for OTel tracing configuration.
 ///
-/// More OTel-specific than the vendor-neutral ``TracingOptions`` in core
+/// More OTel-specific than the vendor-neutral `TracingOptions` in core
 /// Backplane — these flags map directly onto fields of
 /// `OTel.Configuration.TracesConfiguration` and are consumed by
-/// ``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logs:)``.
+/// ``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:)``.
 ///
-/// Compose into a ``BackplaneCommand``:
+/// Compose into a `BackplaneCommand`:
 ///
 /// ```swift
 /// struct Serve: PersistentCommand {
 ///     typealias App = MyApp
 ///     @OptionGroup var tracing: OTelTracingOptions
-///     var requiredServices: [any ServiceKey.Type] { [] }
+///     var requiredServices: [PartialKeyPath<Services>] { [] }
 ///
 ///     func bootstrap(config: ConfigReader, environment: Environment) throws -> BootstrapPlan {
 ///         try BackplaneOTel.makeBootstrap(
@@ -61,7 +61,7 @@ public struct OTelTracingOptions: ParsableArguments, Sendable {
     public init() {}
 
     /// Returns a copy of these options with any unset CLI fields filled
-    /// from the supplied ``ConfigReader`` scope. CLI-supplied values
+    /// from the supplied `ConfigReader` scope. CLI-supplied values
     /// always win; config fills the gap when CLI was silent.
     ///
     /// Looks up these keys in the supplied scope (typical full keys

@@ -7,7 +7,7 @@
 ///
 /// Transitions are driven by the ``ServiceGraph``. The state aggregates
 /// across all active generations — during a blue-green swap the entry
-/// reports ``.replacing`` rather than exposing per-generation detail.
+/// reports ``replacing`` rather than exposing per-generation detail.
 ///
 /// `Hashable` so state values can be emitted over `AsyncStream`s with
 /// backpressure and deduplicated by stream subscribers.

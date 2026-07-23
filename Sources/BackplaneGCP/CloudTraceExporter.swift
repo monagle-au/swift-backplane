@@ -19,7 +19,7 @@ import Tracing
 /// Spans accumulate in memory and are flushed in two cases:
 ///
 /// - Every 5 seconds via the background flush loop started by
-///   ``BackplaneApplication/bootstrapGCPTracing(projectID:)``.
+///   ``Backplane/BackplaneApplication/bootstrapGCPTracing(projectID:)``.
 /// - When the batch reaches 200 spans (the Cloud Trace `batchWrite` limit).
 ///
 /// All export is best-effort: a failed upload is silently dropped rather than
@@ -94,8 +94,8 @@ public actor CloudTraceExporter {
 
     /// Background flush loop — runs until the enclosing task is cancelled.
     ///
-    /// Started by ``BackplaneApplication/bootstrapGCPTracing(projectID:)`` as
-    /// an unstructured `Task`. Wakes every ``flushInterval`` seconds and
+    /// Started by `BackplaneApplication.bootstrapGCPTracing(projectID:)` as
+    /// an unstructured `Task`. Wakes every `flushInterval` seconds and
     /// uploads any accumulated spans.
     public func run() async {
         while !Task.isCancelled {

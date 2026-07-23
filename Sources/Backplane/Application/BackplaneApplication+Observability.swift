@@ -8,7 +8,7 @@ import Metrics
 import Tracing
 
 extension BackplaneApplication {
-    /// Bootstrap the global ``InstrumentationSystem`` with the given
+    /// Bootstrap the global `InstrumentationSystem` with the given
     /// `Instrument` (typically a `Tracer`).
     ///
     /// `InstrumentationSystem.bootstrap(_:)` is a one-shot global. Prefer
@@ -47,7 +47,7 @@ extension BackplaneApplication {
         BootstrapCoordinator.shared.apply(plan)
     }
 
-    /// Bootstrap the global ``MetricsSystem`` with the given factory.
+    /// Bootstrap the global `MetricsSystem` with the given factory.
     ///
     /// `MetricsSystem.bootstrap(_:)` is a one-shot global. Prefer the
     /// declarative path: build a ``BootstrapPlan`` from

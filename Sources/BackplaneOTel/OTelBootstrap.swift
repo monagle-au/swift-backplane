@@ -12,7 +12,7 @@ import ServiceLifecycle
 
 extension BackplaneOTel {
 
-    /// Build a ``BootstrapPlan`` that delegates to swift-otel for global
+    /// Build a `BootstrapPlan` that delegates to swift-otel for global
     /// installation of the LoggingSystem/MetricsSystem/InstrumentationSystem
     /// (per the configuration) and runs the returned OTel service alongside
     /// user services.
@@ -20,14 +20,14 @@ extension BackplaneOTel {
     /// swift-otel's `OTel.bootstrap(configuration:)` synchronously calls
     /// `LoggingSystem.bootstrap`/`MetricsSystem.bootstrap`/
     /// `InstrumentationSystem.bootstrap` for every enabled subsystem. To
-    /// keep ``BootstrapCoordinator`` in sync with that side effect — so a
+    /// keep `BootstrapCoordinator` in sync with that side effect — so a
     /// later coordinator-driven bootstrap from another source doesn't try
     /// to re-install — this helper marks the corresponding subsystems as
     /// already-bootstrapped on the shared coordinator before returning.
     ///
     /// - Parameters:
     ///   - serviceName: `service.name` resource attribute applied to every
-    ///     emitted span/metric/log. Pass ``BackplaneApplication/identifier``.
+    ///     emitted span/metric/log. Pass `BackplaneApplication.identifier`.
     ///   - tracing: Tracing CLI flags. ``OTelTracingOptions/enabled`` gates
     ///     the traces subsystem; the endpoint and sample rate map directly
     ///     onto OTel's configuration.
@@ -35,18 +35,18 @@ extension BackplaneOTel {
     ///   - logsEnabled: Whether OTel should also bootstrap the logging
     ///     subsystem with an OTLP backend. When `true`, OTel takes over
     ///     `LoggingSystem` — apps that want a different log handler
-    ///     (e.g. ``StructuredLogHandler`` with the
-    ///     ``StructuredLogProfile/plain`` or `.gcp(projectID:)` profile)
+    ///     (e.g. `StructuredLogHandler` with the
+    ///     `StructuredLogProfile.plain` or `.gcp(projectID:)` profile)
     ///     should pass `false` here and bootstrap their own logger via
-    ///     ``BootstrapPlan/logHandlerFactory`` (set
-    ///     ``BootstrapPlan/loggerMetadataProvider`` to
+    ///     `BootstrapPlan.logHandlerFactory` (set
+    ///     `BootstrapPlan.loggerMetadataProvider` to
     ///     `OTel.makeLoggingMetadataProvider()` so logs still carry
     ///     trace IDs).
     ///   - configure: Optional last-mile escape hatch for adjusting the
     ///     `OTel.Configuration` after this helper has applied the option
     ///     groups but before swift-otel bootstraps. Use it to set
     ///     mTLS paths, custom headers, resource attributes, etc.
-    /// - Returns: A `BootstrapPlan` whose ``BootstrapPlan/lifecycleServices``
+    /// - Returns: A `BootstrapPlan` whose `lifecycleServices`
     ///   contains the OTel service. The plan's tracing/metrics/logging
     ///   fields are intentionally left nil — those subsystems are already
     ///   installed by the time the coordinator's `apply(_:)` runs.

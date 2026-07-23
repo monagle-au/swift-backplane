@@ -5,7 +5,7 @@
 
 /// How the ``ServiceGraph`` replaces a service when it is restarted.
 ///
-/// The default is ``blueGreen`` with a 30-second grace period. Most
+/// The default is ``blueGreen(grace:)`` with a 30-second grace period. Most
 /// services should accept this default. Override when the service
 /// exclusively owns a resource that prevents two instances coexisting.
 public enum ReplacementStrategy: Sendable {
@@ -20,7 +20,7 @@ public enum ReplacementStrategy: Sendable {
 
     /// Apply new configuration in place — no new generation, no swap.
     /// Requires the service to conform to ``HotReloadable``. If it does
-    /// not, the graph logs a warning and falls back to ``blueGreen``.
+    /// not, the graph logs a warning and falls back to ``blueGreen(grace:)``.
     case hotReload
 
     /// Shut the old instance down before starting the new one.

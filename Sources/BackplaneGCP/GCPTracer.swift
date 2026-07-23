@@ -14,13 +14,13 @@ import ServiceContextModule
 /// A `Tracer` that exports spans to Google Cloud Trace and correlates log
 /// lines in Cloud Logging.
 ///
-/// Install via ``BackplaneApplication/bootstrapGCPTracing(projectID:)``
+/// Install via ``Backplane/BackplaneApplication/bootstrapGCPTracing(projectID:)``
 /// at the very start of `main()`. After bootstrap:
 ///
 /// 1. Every `withSpan` / `startSpan` call (including those in
 ///    `connect-swift-server` that wrap each gRPC handler) generates or
 ///    continues a W3C trace ID and span ID.
-/// 2. The IDs are stored in ``LoggingTraceContext`` on the active
+/// 2. The IDs are stored in `LoggingTraceContext` on the active
 ///    `ServiceContext` so ``GCPLogHandler`` can read them on every log call
 ///    and emit `logging.googleapis.com/trace` + `.../spanId` — the fields
 ///    Cloud Logging uses to render the "view trace" link.
@@ -125,7 +125,7 @@ public struct GCPTracer: Tracer {
     }
 
     /// Extract a W3C `traceparent` header from an inbound carrier and write it
-    /// into the `ServiceContext` as a ``LoggingTraceContext``.
+    /// into the `ServiceContext` as a `LoggingTraceContext`.
     ///
     /// Called by connect-swift-server's `ConnectRouter` at request entry so
     /// that the server-side root span continues the caller's trace rather than
@@ -186,11 +186,11 @@ public struct GCPTracer: Tracer {
 // MARK: - BackplaneApplication convenience
 
 extension BackplaneApplication {
-    /// Bootstrap the global ``InstrumentationSystem`` with a ``GCPTracer`` that
+    /// Bootstrap the global `InstrumentationSystem` with a ``GCPTracer`` that
     /// exports spans to Cloud Trace and correlates log lines in Cloud Logging.
     ///
     /// Call this once at the top of `main()`, **before**
-    /// ``bootstrapLogging(using:metadataProvider:logLevel:)`` so the tracer is
+    /// `bootstrapLogging(using:metadataProvider:logLevel:)` so the tracer is
     /// in place before any logger is constructed:
     ///
     /// ```swift

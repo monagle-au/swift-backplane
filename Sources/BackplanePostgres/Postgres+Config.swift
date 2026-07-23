@@ -12,7 +12,7 @@ import NIOSSL
 import PostgresNIO
 
 extension PostgresClient.Configuration {
-    /// Build a `PostgresClient.Configuration` from a ``ConfigReader`` scope.
+    /// Build a `PostgresClient.Configuration` from a `ConfigReader` scope.
     ///
     /// Connection parameters (matching the existing keys):
     /// - `username` (default `"postgres"`), `password` (secret), `database`

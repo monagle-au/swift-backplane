@@ -24,24 +24,24 @@ public enum ServiceGraphError: Error, Sendable {
 
     /// A timed ``ServiceGraph/requireService(_:timeout:)`` call exceeded
     /// its supplied timeout before the entry reached a resolution-ready
-    /// state. Distinct from ``entryTerminated`` (which signals permanent
+    /// state. Distinct from ``entryTerminated(id:state:)`` (which signals permanent
     /// failure) — `.timedOut` means "this is taking too long", and a
     /// caller may choose to retry, back off, or escalate.
     case timedOut(id: String, expectedType: String, after: Duration)
 
     /// A descriptor declares a dependency on an id that no other
-    /// descriptor provides. Thrown from ``ServiceGraph/init`` so
+    /// descriptor provides. Thrown from `ServiceGraph.init` so
     /// misconfiguration surfaces before any boot work happens.
     case unknownDependency(id: String, referencedBy: String)
 
     /// The declared dependency graph contains a cycle. The `path` names
     /// the entries forming the cycle, beginning and ending at the same
-    /// id. Thrown from ``ServiceGraph/init``.
+    /// id. Thrown from `ServiceGraph.init`.
     case cyclicDependency(path: [String])
 
     /// ``ServiceGraph/boot(roots:)`` was called with a root id that
     /// does not correspond to any registered descriptor. Surfaces
-    /// stringified-id typos (e.g. ``AnyServiceKey(id: "...")``) at
+    /// stringified-id typos (e.g. `AnyServiceKey(id: "...")`) at
     /// boot time rather than letting them produce a silently
     /// smaller-than-expected closure.
     case unknownRoot(id: String)

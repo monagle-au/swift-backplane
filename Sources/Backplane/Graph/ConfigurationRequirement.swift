@@ -24,8 +24,8 @@
 /// config" error parks the entry at `.unconfigured` rather than
 /// transitioning to `.failed`. At that point:
 ///
-/// - ``required`` + post-boot `.unconfigured` → ``ServiceContext/requireService(_:timeout:)``
-///   throws ``ServiceGraphError/entryTerminated(id:expectedType:state:)``
+/// - ``required`` + post-boot `.unconfigured` → `requireService(_:timeout:)`
+///   throws ``ServiceGraphError/entryTerminated(id:state:)``
 ///   with `.unconfigured`. Config is genuinely missing for a service that
 ///   needs it; fail fast.
 /// - ``deferred`` + post-boot `.unconfigured` → `requireService` waits.

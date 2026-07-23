@@ -31,7 +31,7 @@ public struct GCPFinishedSpan: Sendable {
 
 /// A live tracing span produced by ``GCPTracer``.
 ///
-/// Each span writes ``LoggingTraceContext`` into its `ServiceContext` so that
+/// Each span writes `LoggingTraceContext` into its `ServiceContext` so that
 /// every log call made while the span is active includes
 /// `logging.googleapis.com/trace` and `logging.googleapis.com/spanId` — the
 /// fields Cloud Logging uses to render a "view trace" link alongside each

@@ -18,7 +18,7 @@ public protocol ServiceLifecycleHandle: Sendable {
     var state: ServiceState { get }
 
     /// Stream of state transitions. Each call returns a fresh
-    /// ``AsyncStream`` whose first element is the current state
+    /// `AsyncStream` whose first element is the current state
     /// (replay-first semantic).
     func stateStream() -> AsyncStream<ServiceState>
 

@@ -17,7 +17,7 @@ import Synchronization
 /// The underlying `PostgresClient` is a `ServiceLifecycle.Service`
 /// whose `run()` opens connections and stays running for the lifetime
 /// of the service. This wrapper adapts it to the
-/// `ManagedService` two-phase contract used by ``ServiceGraph``:
+/// `ManagedService` two-phase contract used by `ServiceGraph`:
 /// `start()` spawns the client's run loop in a detached task and
 /// returns immediately; `shutdown()` cancels the task and awaits its
 /// termination.
@@ -28,14 +28,14 @@ import Synchronization
 /// immediately after `start()` may see queries fail until the pool's
 /// first connection is established. For production wiring, a thin
 /// supervisor task can verify readiness (e.g. `SELECT 1`) and gate
-/// dependent services with ``HotReloadable``.
+/// dependent services with `HotReloadable`.
 public final class BackplanePostgresService: ManagedService, @unchecked Sendable {
     /// The wrapped `PostgresClient`. Resolve the service via
-    /// ``Services/postgres`` and access this property to drive queries.
+    /// ``Backplane/Services/postgres`` and access this property to drive queries.
     ///
     /// Aliased to ``inner`` for consumers that prefer the Backplane-wide
-    /// `.inner` convention used by ``LifecycleAdapter`` and
-    /// ``PassiveService``.
+    /// `.inner` convention used by `LifecycleAdapter` and
+    /// `PassiveService`.
     public let client: PostgresClient
 
     /// Backplane-wide alias for ``client``. Use whichever reads better
@@ -102,11 +102,11 @@ extension Services {
 
 // MARK: - Descriptor
 
-/// Build a ``EntryDescriptor`` for a Postgres client.
+/// Build an `EntryDescriptor` for a Postgres client.
 ///
 /// The descriptor's factory reads connection parameters from the
 /// `postgres` scope of the application's `ConfigReader` (supplied by
-/// the graph via ``ServiceContext/config``). Required keys (depending
+/// the graph via `ServiceContext.config`). Required keys (depending
 /// on connection mode):
 ///
 /// - `postgres.host` (default `"localhost"`)
@@ -117,7 +117,7 @@ extension Services {
 /// - `postgres.unixSocketPath` (optional, mutually exclusive with host/port)
 ///
 /// TLS options are read from `postgres.tls.*`. See
-/// ``Postgres+Config`` for the full set.
+/// `Postgres+Config.swift` for the full set.
 ///
 /// ```swift
 /// static func services() -> [EntryDescriptor] {
@@ -127,7 +127,7 @@ extension Services {
 ///
 /// - Parameters:
 ///   - subgroup: subgroup tag for failure-policy partitioning.
-///     Defaults to ``SubgroupTag/core``.
+///     Defaults to `SubgroupTag.core`.
 ///   - dependencies: other entries this Postgres service's factory
 ///     resolves through `context.requireService(_:)`.
 public func postgresEntryDescriptor(

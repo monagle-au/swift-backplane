@@ -14,11 +14,11 @@ import ServiceLifecycle
 /// bootstrap (e.g. an OpenTelemetry collector exporter, a metrics scraper, a
 /// log shipper).
 ///
-/// Lifecycle services are not registered through ``ServiceRegistry`` because
-/// they're not addressed by ``ServiceKey`` — user code doesn't pull them out
-/// of ``ServiceValues``. They're started by ``ApplicationRunner`` before the
-/// user's required services so that telemetry is flowing as soon as the
-/// application's own services come up.
+/// Lifecycle services are not registered through the ``ServiceGraph``
+/// because they're not addressed by a ``ServiceKey`` — user code doesn't
+/// resolve them via a ``ServiceContext``. They're started by
+/// `ApplicationRunner` before the user's required services so that
+/// telemetry is flowing as soon as the application's own services come up.
 public struct LifecycleService: Sendable {
     public let label: String
     public let mode: ServiceLifecycleMode
@@ -76,8 +76,8 @@ public struct BootstrapPlan: Sendable {
     public var metricsFactory: (any MetricsFactory)?
 
     /// Pre-built services to start alongside the user's services (e.g. an
-    /// OTel collector exporter). These run with ``ApplicationRunner`` ahead
-    /// of services from ``ServiceRegistry`` so telemetry flows from the very
+    /// OTel collector exporter). These run with `ApplicationRunner` ahead
+    /// of the ``ServiceGraph``'s entries so telemetry flows from the very
     /// first user-service span.
     public var lifecycleServices: [LifecycleService]
 

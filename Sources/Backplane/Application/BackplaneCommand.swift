@@ -72,8 +72,8 @@ public protocol BackplaneCommand: AsyncParsableCommand {
     /// and then allow the service group to shut down.
     ///
     /// - Parameter context: A command-scoped ``ServiceContext`` carrying
-    ///   the application logger and forwarding ``ServiceContext/service(_:)``
-    ///   / ``ServiceContext/requireService(_:timeout:)`` calls to the
+    ///   the application logger and forwarding `service(_:)`
+    ///   / `requireService(_:timeout:)` calls to the
     ///   running ``ServiceGraph``.
     func execute(with context: ServiceContext) async throws
 
@@ -85,7 +85,7 @@ public protocol BackplaneCommand: AsyncParsableCommand {
     var lifecycleMode: ServiceLifecycleMode { get }
 
     /// Build a ``BootstrapPlan`` from this command's parsed flags, the
-    /// application's ``ConfigReader``, and the active ``Environment``.
+    /// application's `ConfigReader`, and the active ``Environment``.
     ///
     /// Called by the default ``run()`` implementation after
     /// ArgumentParser has parsed the command but before any service is
@@ -128,13 +128,13 @@ extension BackplaneCommand {
     /// 1. Reads the active ``Environment`` from the current
     ///    `ServiceContextModule.ServiceContext`, falling back to
     ///    `.development` if not set.
-    /// 2. Calls `App.configReader(for:)` to build the ``ConfigReader``.
+    /// 2. Calls `App.configReader(for:)` to build the `ConfigReader`.
     /// 3. Calls ``bootstrap(config:environment:)`` and applies the
     ///    returned plan via ``BootstrapCoordinator/shared``.
     /// 4. Constructs the application's root `Logger`.
     /// 5. Calls `App.services()` to gather descriptors and builds a
     ///    ``ServiceGraph``.
-    /// 6. Creates an ``ApplicationRunner`` and invokes its `run`,
+    /// 6. Creates an `ApplicationRunner` and invokes its `run`,
     ///    passing the plan's ``BootstrapPlan/lifecycleServices`` so
     ///    things like an OTel exporter run alongside graph entries.
     public func run() async throws {

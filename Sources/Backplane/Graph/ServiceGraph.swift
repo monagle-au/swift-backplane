@@ -22,7 +22,7 @@ import ServiceLifecycle
 ///
 /// **Entries dictionary:** Marked `nonisolated(unsafe)` because:
 /// 1. It is set once in `init` and never mutated.
-/// 2. Each ``ServiceEntry`` protects its own mutable state with a `Mutex`.
+/// 2. Each `ServiceEntry` protects its own mutable state with a `Mutex`.
 /// Reading the dictionary without the actor hop is therefore sound.
 public actor ServiceGraph {
 
@@ -62,11 +62,19 @@ public actor ServiceGraph {
     /// declares an unknown dependency id, or if the declared dependency
     /// graph contains a cycle.
     ///
-    /// - Parameter subgroupPolicies: per-tag overrides. Tags absent from
-    ///   this map fall back to the stock policy: ``SubgroupPolicy/core``
-    ///   for ``SubgroupTag/core``, ``SubgroupPolicy/integrations`` for
-    ///   ``SubgroupTag/integrations``, and ``SubgroupPolicy/core`` for
-    ///   any other (custom-named) tag.
+    /// - Parameters:
+    ///   - descriptors: the full set of entries this graph may boot.
+    ///   - logger: graph-level logger; `nil` silences graph diagnostics
+    ///     (per-entry loggers are always constructed).
+    ///   - config: application `ConfigReader` handed to factories via
+    ///     ``ServiceContext/config``; `nil` for graph-machinery tests.
+    ///   - shutdownTimeout: bound on a drained generation's
+    ///     `shutdown()` before the graph cancels it.
+    ///   - subgroupPolicies: per-tag overrides. Tags absent from
+    ///     this map fall back to the stock policy: ``SubgroupPolicy/core``
+    ///     for ``SubgroupTag/core``, ``SubgroupPolicy/integrations`` for
+    ///     ``SubgroupTag/integrations``, and ``SubgroupPolicy/core`` for
+    ///     any other (custom-named) tag.
     public init(
         descriptors: [EntryDescriptor],
         logger: Logger? = nil,
@@ -227,7 +235,7 @@ public actor ServiceGraph {
     /// (but whose factory has returned) can resolve that peer's live
     /// instance without waiting for `start()` to complete. The two-phase
     /// boot architecture from §7 — factory phase, then separate start
-    /// phase via an inner ``ServiceGroup`` — is a future evolution; the
+    /// phase via an inner `ServiceGroup` — is a future evolution; the
     /// spike achieves the same observable in single-phase boot by
     /// swapping the active generation before calling `start()`.
     nonisolated public func requireService<T: Sendable>(
@@ -408,7 +416,7 @@ public actor ServiceGraph {
     /// **Note on ordering.** Dependencies drive pruning and cycle detection
     /// but do *not* enforce boot ordering. Entries in the closure are
     /// launched concurrently and use
-    /// ``ServiceContext/requireService(_:timeout:)`` to wait for any
+    /// `ServiceContext.requireService(_:timeout:)` to wait for any
     /// dependencies their factories actually need. A future slice may
     /// add wave-based parallel ordering as an efficiency.
     public func boot(roots: [AnyServiceKey]? = nil) async throws {
@@ -419,7 +427,7 @@ public actor ServiceGraph {
     }
 
     /// Configure the roots that ``run()`` should boot when the graph is
-    /// supervised inside an outer ``ServiceGroup``. Call before adding
+    /// supervised inside an outer `ServiceGroup`. Call before adding
     /// the graph to the group. `nil` (the default) means "boot every
     /// registered entry."
     ///
@@ -671,7 +679,7 @@ public actor ServiceGraph {
 
     /// Trigger replacement of the entry at `id` using its declared strategy.
     ///
-    /// Currently only ``.blueGreen`` is implemented; `.hotReload` and
+    /// Currently only `.blueGreen` is implemented; `.hotReload` and
     /// `.coldRestart` fall through to blue-green with a logged note.
     ///
     /// The method returns immediately after transitioning the entry to
@@ -916,7 +924,7 @@ public actor ServiceGraph {
     ///   subject to the entry's subgroup `restartable` policy.
     ///
     /// Restartability checks happen inside the fall-back path
-    /// (``restart(at:)`` rejects non-restartable subgroups). ``reload``
+    /// (``restart(at:)`` rejects non-restartable subgroups). `reload`
     /// itself does not check `restartable` — a `.core` (non-restartable)
     /// service can still be hot-reloaded if it conforms to
     /// ``HotReloadable``. This is intentional: the design note's
@@ -1004,7 +1012,7 @@ public actor ServiceGraph {
 
 extension ServiceGraph: ServiceLifecycle.Service {
 
-    /// Run the graph inside an outer ``ServiceGroup``.
+    /// Run the graph inside an outer `ServiceGroup`.
     ///
     /// **Phase 1.** Factories run and active generations are swapped;
     /// entries reach ``ServiceState/starting`` with live handles
@@ -1012,8 +1020,8 @@ extension ServiceGraph: ServiceLifecycle.Service {
     /// (failFast / degraded) apply exactly as in ``boot(roots:)`` —
     /// the shared partition logic is reused.
     ///
-    /// **Phase 2.** A per-entry ``ServiceGraphEntryAdapter`` is
-    /// supervised by an inner ``ServiceGroup``. Each adapter:
+    /// **Phase 2.** A per-entry `ServiceGraphEntryAdapter` is
+    /// supervised by an inner `ServiceGroup`. Each adapter:
     /// 1. Calls `start()` on the live instance.
     /// 2. Transitions the entry to ``ServiceState/running``.
     /// 3. Awaits `gracefulShutdown()`.
@@ -1037,10 +1045,10 @@ extension ServiceGraph: ServiceLifecycle.Service {
     /// call ``boot(roots:)``. They are two operational modes:
     /// - Standalone: callers invoke ``boot(roots:)`` and then use
     ///   ``resolve(_:)``/``requireService(_:timeout:)`` — single-phase
-    ///   boot, no inner ``ServiceGroup``. This is what the existing
+    ///   boot, no inner `ServiceGroup`. This is what the existing
     ///   tests use.
     /// - Composed: callers put the graph inside an outer
-    ///   ``ServiceGroup`` and invoke `run()` — two-phase boot, the
+    ///   `ServiceGroup` and invoke `run()` — two-phase boot, the
     ///   adapter drives `start()`/`shutdown()`.
     /// Mixing the two within one graph lifetime is undefined.
     public func run() async throws {

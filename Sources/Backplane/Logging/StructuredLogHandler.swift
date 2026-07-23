@@ -18,7 +18,7 @@ import ServiceContextModule
 /// CloudWatch, OTel filelog, plus Cloud Logging itself). Vendor
 /// shipping their own magic-key dialect provide an extension method
 /// returning a customised profile — see
-/// ``StructuredLogProfile/gcp(projectID:)`` in the `BackplaneGCP` target.
+/// `StructuredLogProfile.gcp(projectID:)` in the `BackplaneGCP` target.
 public struct StructuredLogProfile: Sendable {
 
     /// Top-level JSON key for the log severity / level.
@@ -39,7 +39,7 @@ public struct StructuredLogProfile: Sendable {
 
     /// Map a `Logger.Level` to the string emitted under
     /// ``severityKey``. The default uppercases the swift-log level name
-    /// (``Logger/Level/info`` becomes `"INFO"`), which matches both the
+    /// (`Logger.Level.info` becomes `"INFO"`), which matches both the
     /// RFC 5424 syslog severity names and the GCP `LogSeverity` enum.
     public var severityFormatter: @Sendable (Logger.Level) -> String
 
@@ -111,7 +111,7 @@ extension StructuredLogProfile {
 ///
 /// The default ``StructuredLogProfile/plain`` profile is vendor-neutral.
 /// For Cloud Logging's magic key dialect, enable the `GCP` package
-/// trait and use ``StructuredLogProfile/gcp(projectID:)`` (declared in
+/// trait and use `StructuredLogProfile.gcp(projectID:)` (declared in
 /// the `BackplaneGCP` target).
 public struct StructuredLogHandler: LogHandler {
 
