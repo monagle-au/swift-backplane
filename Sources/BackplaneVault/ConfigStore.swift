@@ -48,7 +48,7 @@ import Foundation
 /// ## Secrets
 ///
 /// Secrets are stored encrypted both on disk (JSON file) and in-memory
-/// (``MutableInMemoryProvider``) using the provided ``ConfigEncryption``
+/// (`MutableInMemoryProvider`) using the provided ``ConfigEncryption``
 /// implementation. A ``DecryptingConfigProvider`` transparently decrypts
 /// values marked `isSecret` on read, so consumers always receive plaintext.
 /// This keeps plaintext values ephemeral — they exist only during reads.

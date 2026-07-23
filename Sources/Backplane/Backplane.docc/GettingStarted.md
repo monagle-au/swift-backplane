@@ -8,16 +8,15 @@ either as an HTTP-style persistent service or as a one-shot task.
 A Backplane app has three ingredients:
 
 1. A type that conforms to ``BackplaneApplication`` and is marked
-   `@main`. It declares an `identifier`, registers services, and
-   names a `RootCommand`.
+   `@main`. It declares an `identifier`, returns the app's service
+   descriptors from `services()`, and names a `RootCommand`.
 2. One or more ``BackplaneCommand`` conformances (typically
    ``PersistentCommand`` or ``TaskCommand``). Each declares the
-   ``ServiceKey``s it needs, optionally builds a
-   ``BootstrapPlan``, and — for tasks — implements
-   `execute(with:)`.
-3. A `ServiceRegistry` populated in `configure(_:)` mapping each
-   `ServiceKey` to a build closure that returns the service value
-   plus its lifecycle service.
+   services it needs as keypaths over the ``Services`` namespace,
+   optionally builds a ``BootstrapPlan``, and — for tasks —
+   implements `execute(with:)`.
+3. Typed ``ServiceKey`` declarations on ``Services``, each paired
+   with an ``EntryDescriptor`` whose factory builds the service.
 
 ## Add the package
 
@@ -48,8 +47,8 @@ struct MyApp: BackplaneApplication {
     typealias RootCommand = Serve
     static let identifier = "my-app"
 
-    static func configure(_ services: inout ServiceRegistry) {
-        // No services yet — Serve will run with an empty registry.
+    static func services() -> [EntryDescriptor] {
+        []   // No services yet — Serve will run with an empty graph.
     }
 }
 
@@ -59,23 +58,23 @@ struct Serve: PersistentCommand {
         abstract: "Run the service forever."
     )
 
-    var requiredServices: [any ServiceKey.Type] { [] }
+    var requiredServices: [PartialKeyPath<Services>] { [] }
 }
 ```
 
 `swift run my-app` boots the app, parses CLI args, applies the
-default (empty) ``BootstrapPlan``, builds an empty service
-registry, and runs an empty `ServiceGroup` until the process
-receives `SIGINT`/`SIGTERM`. Not very useful yet — but the harness
-is fully wired.
+default (empty) ``BootstrapPlan``, builds an empty ``ServiceGraph``,
+and runs an empty `ServiceGroup` until the process receives
+`SIGINT`/`SIGTERM`. Not very useful yet — but the harness is fully
+wired.
 
 ## Add a real service
 
-A "service" is anything conforming to
-[`ServiceLifecycle.Service`](https://swiftpackageindex.com/swift-server/swift-service-lifecycle/main/documentation/servicelifecycle/service).
-For long-lived components (HTTP servers, queue consumers, gRPC
-listeners) the conformance is usually provided by the upstream
-library. For a hello-world example, define your own:
+A long-lived component is anything conforming to
+[`ServiceLifecycle.Service`](https://swiftpackageindex.com/swift-server/swift-service-lifecycle/main/documentation/servicelifecycle/service)
+— for HTTP servers, queue consumers, or gRPC listeners the
+conformance is usually provided by the upstream library. For a
+hello-world example, define your own:
 
 ```swift
 import Logging
@@ -92,28 +91,28 @@ struct ClockService: Service, Sendable {
 }
 ```
 
-Register it via a ``ServiceKey`` and ``ConcreteServiceEntry``:
+Declare a key for it on ``Services``, wrapping the `Service` in a
+``LifecycleAdapter`` so the graph can manage it:
 
 ```swift
-struct ClockServiceKey: ServiceKey {
-    static var defaultValue: ClockService? { nil }
+extension Services {
+    public var clock: ServiceKey<LifecycleAdapter<ClockService>> { "clock" }
 }
+```
 
-extension ServiceValues {
-    var clock: ClockService? {
-        get { self[ClockServiceKey.self] }
-        set { self[ClockServiceKey.self] = newValue }
-    }
-}
+The declaration body is just the key's `id` string —
+``ServiceKey`` is `ExpressibleByStringLiteral`, so `"clock"` and
+`ServiceKey(id: "clock")` are equivalent. Then return an
+``EntryDescriptor`` for it from `services()`:
 
+```swift
 extension MyApp {
-    static func configure(_ services: inout ServiceRegistry) {
-        services.register(ClockServiceKey.self, entry: ConcreteServiceEntry<ClockServiceKey>(
-            label: "clock",
-            mode: .persistent
-        ) { _, _, logger in
-            ClockService(logger: logger)
-        })
+    static func services() -> [EntryDescriptor] {
+        [
+            EntryDescriptor(\.clock) { context in
+                LifecycleAdapter(ClockService(logger: context.logger))
+            }
+        ]
     }
 }
 ```
@@ -123,17 +122,25 @@ Update the command to declare its dependency:
 ```swift
 struct Serve: PersistentCommand {
     typealias App = MyApp
-    var requiredServices: [any ServiceKey.Type] { [ClockServiceKey.self] }
+    var requiredServices: [PartialKeyPath<Services>] { [\.clock] }
 }
 ```
 
 Now `swift run my-app` boots `ClockService` and logs `tick` every
-second until you stop it.
+second until you stop it. Only the transitive closure of a
+command's `requiredServices` boots — descriptors nothing depends on
+stay cold.
+
+Passive values (a client with no run loop, a shared cache) skip
+the adapter: register them with `EntryDescriptor`'s `passive:`
+initialiser and the graph wraps and unwraps a ``PassiveService``
+for you. See <doc:KeyConcepts> for the three registration forms.
 
 ## Add a task command
 
-Tasks share the same registry but exit when their work is done.
-Implement ``TaskCommand`` and supply `execute(with:)`:
+Tasks share the same descriptors but exit when their work is done.
+Implement ``TaskCommand`` and supply `execute(with:)` — the
+``ServiceContext`` argument resolves services by keypath:
 
 ```swift
 struct PrintHello: TaskCommand {
@@ -143,10 +150,10 @@ struct PrintHello: TaskCommand {
         abstract: "Print a greeting and exit."
     )
 
-    var requiredServices: [any ServiceKey.Type] { [] }
+    var requiredServices: [PartialKeyPath<Services>] { [] }
 
-    func execute(with services: ServiceValues) async throws {
-        print("Hello from \(MyApp.identifier).")
+    func execute(with context: ServiceContext) async throws {
+        context.logger.info("Hello from \(MyApp.identifier).")
     }
 }
 ```
@@ -182,9 +189,9 @@ struct Serve: PersistentCommand {
     typealias App = MyApp
     @OptionGroup var logging: LoggingOptions
 
-    var requiredServices: [any ServiceKey.Type] { [ClockServiceKey.self] }
+    var requiredServices: [PartialKeyPath<Services>] { [\.clock] }
 
-    func bootstrap(config: ConfigReader, environment: Environment) -> BootstrapPlan {
+    func bootstrap(config: ConfigReader, environment: Environment) async throws -> BootstrapPlan {
         var plan = BootstrapPlan()
         plan.logLevel = logging.resolvedLogLevel
         plan.logHandlerFactory = logging.format.factory(
@@ -205,6 +212,9 @@ those flags through the ``BootstrapCoordinator`` before any
 - <doc:LocalDeployment> walks through a full local-dev workflow.
 - <doc:CloudDeployment> shows how the same binary deploys to a
   managed cloud runtime.
-- For database access, see ``BackplanePostgres``.
-- For OpenTelemetry export, see ``BackplaneOTel``.
-- For Cloud Logging / Cloud Trace, see ``BackplaneGCP``.
+- For database access, see the `BackplanePostgres` product
+  (`Postgres` trait).
+- For OpenTelemetry export, see the `BackplaneOTel` product
+  (`OTel` trait).
+- For Cloud Logging / Cloud Trace, see the `BackplaneGCP` product
+  (`GCP` trait).

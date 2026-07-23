@@ -15,7 +15,7 @@ underlying libraries.
 
 Backplane is structured for both long-running services (HTTP servers,
 queue workers) and one-shot tasks (migrations, backfills) sharing the
-same service registry and configuration story.
+same service graph and configuration story.
 
 ---
 
@@ -23,11 +23,15 @@ same service registry and configuration story.
 
 - **Declarative service graph**. Services are registered via typed
   `ServiceKey<T>` values exposed as keypath-accessible properties on
-  the `Services` namespace. Backplane topologically sorts them
-  before handing them to a `ServiceGroup`.
-- **Keypath-driven references**. `\.databaseKey` style references
+  the `Services` namespace. Backplane boots only the transitive
+  closure of a command's required services, with per-subgroup
+  failure policies, blue-green replacement, hot reload, and
+  recovery of failed entries.
+- **Keypath-driven references**. `\.database` style references
   everywhere — autocomplete-friendly and the resolved type is
-  inferred from the keypath.
+  inferred from the keypath. A key's resolved type can also be a
+  protocol, backed by a concrete registration (`passive:` /
+  `factory:as:` on `EntryDescriptor`).
 - **Two command shapes**: `PersistentCommand` (services run until
   signalled) and `TaskCommand` (services come up, the command does
   its work, the group shuts down gracefully).
@@ -72,11 +76,12 @@ the ones you need:
 | Trait      | Library product   | Adds                                                     |
 |------------|-------------------|----------------------------------------------------------|
 | (none)     | `Backplane`        | Core framework, always available.                        |
-| (none)     | `BackplaneVault`   | `ConfigStore` (writable, secret-aware config) + `ConfigEncryption` protocol + `PassthroughEncryption`. Imported on its own, no extra deps. |
+| (none)     | `BackplaneVault`   | `ConfigStore` (writable, secret-aware config; safe for concurrent stores on one file via locked read-merge-writes) + `ConfigEncryption` protocol + `PassthroughEncryption` + `FileLock` (cross-process advisory lock). Imported on its own, no extra deps. |
 | `Postgres` | `BackplanePostgres`| `PostgresNIO`-backed service key, configuration, migrations. |
 | `OTel`     | `BackplaneOTel`    | `swift-otel` integration: `BootstrapPlan` factory + CLI flags. |
 | `GCP`      | `BackplaneGCP`     | Cloud Trace tracer/exporter + Cloud Logging `LogHandler`. |
 | `KeyfileEncryption` | (extends `BackplaneVault`) | `LocalKeyfileEncryption` — AES-256-GCM reference impl backed by a machine-local keyfile. Pulls `swift-crypto`. |
+| `Macros`   | (extends `Backplane`) | The `#service` declaration macro — shorthand for declaring a key on `Services`. Pulls `swift-syntax` at build time; off by default. |
 
 Then depend on each library product in the targets that need it:
 
@@ -121,9 +126,9 @@ struct Serve: PersistentCommand {
     @OptionGroup var logging: LoggingOptions
     @OptionGroup var tracing: TracingOptions
 
-    var requiredServices: [PartialKeyPath<Services>] { [\.postgresKey] }
+    var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
 
-    func bootstrap(config: ConfigReader, environment: Environment) -> BootstrapPlan {
+    func bootstrap(config: ConfigReader, environment: Environment) async throws -> BootstrapPlan {
         var plan = BootstrapPlan()
         plan.logLevel = logging.resolvedLogLevel
         plan.logHandlerFactory = logging.format.factory(default: BackplaneLogging.cloudRunOrStream.asFactory)
@@ -134,10 +139,10 @@ struct Serve: PersistentCommand {
 struct Migrate: TaskCommand {
     typealias App = MyApp
     static let configuration = CommandConfiguration(abstract: "Run database migrations")
-    var requiredServices: [PartialKeyPath<Services>] { [\.postgresKey] }
+    var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
 
     func execute(with context: ServiceContext) async throws {
-        let pg = try await context.requireService(\.postgresKey)
+        let pg = try await context.requireService(\.postgres)
         try await PostgresMigrator.migrate(
             myMigrations,
             on: pg.client,
@@ -154,21 +159,25 @@ a typed `ServiceKey<T>`. Consumers extend `Services` once per key:
 
 ```swift
 extension Services {
-    public var databaseKey: ServiceKey<PostgresClient> {
+    public var database: ServiceKey<PostgresClient> {
         ServiceKey(id: "database")
     }
 }
 ```
 
-That's the entire boilerplate. The keypath `\.databaseKey` is then
-usable wherever Backplane accepts a service key — `requireService`,
-dependency lists on `EntryDescriptor`, `requiredServices` on a
-command. The return type of `requireService(\.databaseKey)` is
-inferred from the keypath, so no cast is needed at the call site.
+That's the entire boilerplate — name the property for the value, not
+`…Key`. `ServiceKey` is `ExpressibleByStringLiteral`, so the body can
+also be just `"database"`. With the `Macros` trait enabled,
+`#service(PostgresClient.self, name: "database")` expands to the same
+declaration. The keypath `\.database` is then usable wherever
+Backplane accepts a service key — `requireService`, dependency lists
+on `EntryDescriptor`, `requiredServices` on a command. The return
+type of `requireService(\.database)` is inferred from the keypath, so
+no cast is needed at the call site.
 
 Satellite targets ship their keys the same way: `BackplanePostgres`
-exposes `Services.postgresKey`, which is why the snippet above writes
-`\.postgresKey` without declaring it itself.
+exposes `Services.postgres`, which is why the snippet above writes
+`\.postgres` without declaring it itself.
 
 ## Documentation
 
@@ -182,6 +191,9 @@ Full DocC documentation lives alongside each module:
   walkthrough.
 - [`BackplaneGCP`](Sources/BackplaneGCP/BackplaneGCP.docc/) — Cloud
   Trace + Cloud Logging walkthrough.
+- [`BackplaneVault`](Sources/BackplaneVault/BackplaneVault.docc/) —
+  writable, encryption-aware configuration: core model, reading &
+  writing, encryption backends, file locking.
 
 Build the docs locally with the
 [Swift DocC Plugin](https://github.com/swiftlang/swift-docc-plugin):
@@ -194,8 +206,8 @@ swift package --traits Postgres,OTel,GCP \
 ## Testing
 
 ```bash
-swift test                                 # core only
-swift test --traits Postgres,OTel,GCP      # everything
+swift test                                                        # core only
+swift test --traits Postgres,OTel,GCP,KeyfileEncryption,Macros    # everything
 ```
 
 The test suite covers dependency resolution, lifecycle modes,

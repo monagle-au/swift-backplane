@@ -125,7 +125,7 @@ public final class ServiceContext: Sendable {
 
     // MARK: - Configuration
 
-    /// Return the application's ``ConfigReader``, or throw
+    /// Return the application's `ConfigReader`, or throw
     /// ``ServiceGraphError/missingConfigReader(entryID:)`` if the
     /// graph was constructed without one.
     ///

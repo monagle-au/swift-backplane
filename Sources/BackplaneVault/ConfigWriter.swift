@@ -78,7 +78,7 @@ public struct ConfigWriter: Sendable {
     ///
     /// This is the synchronous entry point; the wait for the lock parks the
     /// calling thread for at most `lockTimeout`. Async callers that manage
-    /// the lock themselves use ``mergeHoldingLock(key:value:filePath:)``.
+    /// the lock themselves use the internal `mergeHoldingLock(key:value:filePath:)`.
     ///
     /// - Parameters:
     ///   - key: The dot-separated key to set.

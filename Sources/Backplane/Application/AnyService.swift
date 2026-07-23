@@ -5,7 +5,7 @@
 
 import ServiceLifecycle
 
-/// A type-erased ``Service`` wrapper.
+/// A type-erased `Service` wrapper.
 ///
 /// Use this when you need to store or return a concrete `Service`
 /// conformance whose generic type cannot be expressed directly — for

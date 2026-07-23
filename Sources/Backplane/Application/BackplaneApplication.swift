@@ -64,7 +64,7 @@ public protocol BackplaneApplication: Sendable {
     /// Called once during startup, before any command runs.
     static func services() -> [EntryDescriptor]
 
-    /// Builds the ``ConfigReader`` used by all commands in this
+    /// Builds the `ConfigReader` used by all commands in this
     /// application.
     ///
     /// Override to customise the configuration stack — for example, to
@@ -84,7 +84,7 @@ public protocol BackplaneApplication: Sendable {
     ///
     /// - Parameter environment: The resolved runtime environment
     ///   (e.g. `.development`, `.production`).
-    /// - Returns: A configured ``ConfigReader`` for the application.
+    /// - Returns: A configured `ConfigReader` for the application.
     static func configReader(for environment: Environment) async throws -> ConfigReader
 
     /// The root CLI command for this application.

@@ -11,15 +11,17 @@ Backplane ties together `swift-service-lifecycle`,
 `swift-configuration` so that an application is a single
 ``BackplaneApplication`` declaration plus one or more
 ``BackplaneCommand`` conformances. The framework handles everything
-between `@main` and your `Service`s running in a
+between `@main` and your services running in a
 `ServiceGroup`:
 
 - Parsing CLI arguments via ArgumentParser
 - Building a typed `ConfigReader` for the active ``Environment``
 - Applying a ``BootstrapPlan`` to the global
   logging / metrics / tracing systems in the right order
-- Topologically sorting ``ServiceKey`` dependencies and building
-  services in dependency order
+- Booting the transitive closure of each command's required
+  ``ServiceKey``s through a ``ServiceGraph``, with per-subgroup
+  failure policies, blue-green replacement, hot reload, and
+  recovery of failed entries
 - Running the resulting `ServiceGroup` with graceful shutdown
 
 Backplane is opinionated about *order* and *ergonomics*; it stays
@@ -48,18 +50,38 @@ integrations they don't use.
 - ``PersistentCommand``
 - ``TaskCommand``
 - ``Environment``
-
-### Service registry
-
-- ``ServiceKey``
-- ``ServiceRegistry``
-- ``ServiceValues``
-- ``ServiceEntry``
-- ``ConcreteServiceEntry``
 - ``ServiceLifecycleMode``
+
+### Service graph
+
+- ``ServiceGraph``
+- ``EntryDescriptor``
+- ``ServiceKey``
+- ``Services``
+- ``AnyServiceKey``
+- ``ServiceKeyConvertible``
+- ``ServiceContext``
+- ``ServiceState``
+- ``ServiceFault``
+- ``ServiceGraphError``
+
+### Managed services
+
+- ``ManagedService``
+- ``LifecycleAdapter``
+- ``PassiveService``
+- ``HotReloadable``
+- ``ReplacementStrategy``
 - ``AnchorService``
 - ``AnyService``
-- ``ApplicationError``
+
+### Subgroups & health
+
+- ``SubgroupTag``
+- ``SubgroupPolicy``
+- ``ServiceHealthReporter``
+- ``ServiceLifecycleHandle``
+- ``ConfigurationRequirement``
 
 ### Bootstrap pipeline
 
@@ -76,11 +98,5 @@ integrations they don't use.
 - ``StructuredLogProfile``
 - ``BackplaneLogging``
 - ``LoggingTraceContext``
+- ``LoggingTraceContextKey``
 - ``LogHandlerFactory``
-
-### Service context
-
-- ``ServiceContext/active``
-- ``ServiceContext/environment``
-- ``ServiceContext/logger``
-- ``ServiceContext/loggingTraceContext``

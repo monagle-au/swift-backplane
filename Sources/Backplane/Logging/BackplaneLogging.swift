@@ -9,7 +9,7 @@ import Logging
 /// A factory that produces a `LogHandler` for a given logger label.
 ///
 /// Used as the closure argument to `LoggingSystem.bootstrap(_:)`, either
-/// directly or via ``BackplaneApplication/bootstrapLogging(using:)``.
+/// directly or via ``BackplaneApplication/bootstrapLogging(using:metadataProvider:logLevel:)``.
 public typealias LogHandlerFactory = @Sendable (_ label: String) -> any LogHandler
 
 /// Namespace for Backplane's logging conveniences: stock `LogHandler`
@@ -23,7 +23,7 @@ public typealias LogHandlerFactory = @Sendable (_ label: String) -> any LogHandl
 ///
 /// Vendor-specific dialects (e.g. Cloud Logging's magic-key shape)
 /// live in opt-in trait-gated targets: enable the `GCP` package trait
-/// for ``BackplaneGCP`` and use ``BackplaneGCP/cloudRunOrStream`` for
+/// for `BackplaneGCP` and use `BackplaneGCP.cloudRunOrStream` for
 /// Cloud Logging integration.
 public enum BackplaneLogging {
 
@@ -87,7 +87,7 @@ public enum BackplaneLogging {
     ///
     /// Apps that want Cloud Logging's magic-key dialect (the `view
     /// trace` link, GCP-specific severity strings, etc.) should enable
-    /// the `GCP` package trait and use ``BackplaneGCP/cloudRunOrStream``
+    /// the `GCP` package trait and use `BackplaneGCP.cloudRunOrStream`
     /// from the `BackplaneGCP` target instead.
     public static let cloudRunOrStream = EnvironmentSelector(
         entries: [(isCloudRun, plain)],
@@ -150,7 +150,7 @@ public enum BackplaneLogging {
 
         /// The selector as a factory closure suitable for
         /// `LoggingSystem.bootstrap(_:)` and
-        /// ``BackplaneApplication/bootstrapLogging(using:)``.
+        /// ``BackplaneApplication/bootstrapLogging(using:metadataProvider:logLevel:)``.
         public var asFactory: LogHandlerFactory {
             { label in self.makeHandler(for: label) }
         }

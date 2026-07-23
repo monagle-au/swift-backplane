@@ -19,7 +19,7 @@ extension StructuredLogProfile {
     /// - `logging.googleapis.com/trace`,
     ///   `logging.googleapis.com/spanId`, and
     ///   `logging.googleapis.com/trace_sampled` for trace correlation
-    ///   when an active ``LoggingTraceContext`` is present and the
+    ///   when an active `LoggingTraceContext` is present and the
     ///   project ID is known
     ///
     /// Reference: <https://cloud.google.com/logging/docs/structured-logging>.
@@ -28,7 +28,7 @@ extension StructuredLogProfile {
     ///   `GOOGLE_CLOUD_PROJECT` (Cloud Run injects this automatically).
     ///   Pass an explicit value when running outside Cloud Run, or pass
     ///   `""`/`nil` to suppress trace correlation even when a
-    ///   ``LoggingTraceContext`` is set.
+    ///   `LoggingTraceContext` is set.
     public static func gcp(
         projectID: String? = ProcessInfo.processInfo.environment["GOOGLE_CLOUD_PROJECT"]
     ) -> StructuredLogProfile {

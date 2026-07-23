@@ -13,7 +13,7 @@ correlation — driven by environment variables, CLI flags, or
 constants in the command's ``BackplaneCommand/bootstrap(config:environment:)``.
 
 This guide covers the cross-cutting concerns. For vendor-specific
-walkthroughs see ``BackplaneGCP`` and ``BackplaneOTel``.
+walkthroughs see the `BackplaneGCP` and `BackplaneOTel` products.
 
 ## The shape of a cloud-deployed Backplane app
 
@@ -27,7 +27,7 @@ container starts
        2. metrics       (e.g. swift-otel meter)
        3. logging       (e.g. StructuredLogHandler with .plain or .gcp profile)
   → root Logger is built
-  → user services start in dependency order
+  → ServiceGraph boots the command's required services
   → ServiceGroup runs until SIGTERM
   → graceful shutdown drains exporters, closes pools, returns
 ```
@@ -65,23 +65,26 @@ the runtime route stdout/stderr to the log aggregator.
 Backplane distinguishes `Environment` from `ConfigReader`:
 
 - ``Environment`` (`.development`, `.testing`, `.production`)
-  describes *which* configuration profile to use. Read via
-  ``ServiceContext/environment`` or ``Environment/get(_:)``.
-- ``Configuration/ConfigReader`` is the typed key/value lookup —
+  describes *which* configuration profile to use. It is resolved
+  from the ambient `ServiceContextModule.ServiceContext`
+  (defaulting to `.development`); ``Environment/Arguments`` is an
+  opt-in `ParsableArguments` for apps that want to select it from
+  the CLI. Process env vars are read via ``Environment/get(_:)``.
+- `ConfigReader` is the typed key/value lookup —
   env vars by default, layered with `.env`, in-memory defaults,
   or any other `ConfigProvider`.
 
-In a managed runtime, set environment-driving env vars on the
-service:
+In a managed runtime, set configuration-driving env vars on the
+service — an `EnvironmentVariablesProvider` maps each dotted
+config key to its upper-snake-case form:
 
 ```bash
-BACKPLANE_ENVIRONMENT=production
-LOGGING_LEVEL=info
-LOGGING_FORMAT=json
-TRACING_ENABLED=true
+LOGGING_LEVEL=info                # logging.level
+LOGGING_FORMAT=json               # logging.format
+TRACING_ENABLED=true              # tracing.enabled
 TRACING_ENDPOINT=otel-collector:4317
-postgres.host=10.0.0.42
-postgres.password=...           # set via secret manager
+POSTGRES_HOST=10.0.0.42           # postgres.host
+POSTGRES_PASSWORD=...             # set via secret manager
 ```
 
 Override ``BackplaneApplication/configReader(for:)`` to layer
@@ -92,8 +95,8 @@ secrets from your vendor's secret manager via an
 
 Each observability option group (``LoggingOptions``,
 ``TracingOptions``, ``MetricsOptions``, plus the OTel-specific
-ones in ``BackplaneOTel``) exposes a `merging(from:)` method that
-fills any unset CLI fields from a ``Configuration/ConfigReader``
+ones in the `BackplaneOTel` product) exposes a `merging(from:)`
+method that fills any unset CLI fields from a `ConfigReader`
 scope. CLI takes precedence; config fills the gap. This lets a
 managed-runtime operator set everything via env vars without
 touching the binary or its arguments:
@@ -104,7 +107,7 @@ struct Serve: PersistentCommand {
     @OptionGroup var logging: LoggingOptions
     @OptionGroup var tracing: TracingOptions
 
-    func bootstrap(config: ConfigReader, environment: Environment) -> BootstrapPlan {
+    func bootstrap(config: ConfigReader, environment: Environment) async throws -> BootstrapPlan {
         let log = logging.merging(from: config.scoped(to: "logging"))
         let trace = tracing.merging(from: config.scoped(to: "tracing"))
 
@@ -136,7 +139,7 @@ Three combinations cover most production setups:
 
 | Aggregator | Library            | Bootstrap factory                          |
 |------------|--------------------|--------------------------------------------|
-| Cloud Logging (Cloud Run / GKE) | `BackplaneGCP` | ``BackplaneGCP/cloudRunOrStream`` or ``BackplaneGCP/logHandlerFactory`` |
+| Cloud Logging (Cloud Run / GKE) | `BackplaneGCP` | `BackplaneGCP.cloudRunOrStream` or `BackplaneGCP.logHandlerFactory` |
 | Generic JSON ingester (Datadog, Loki, CloudWatch) | core `Backplane` | ``BackplaneLogging/plain`` |
 | OTel collector | `BackplaneOTel` | `BackplaneOTel.makeBootstrap(serviceName:tracing:metrics:logsEnabled:)` |
 | Local terminal | core `Backplane` | ``BackplaneLogging/stream`` |
@@ -150,8 +153,8 @@ the factory yourself and assign it to
 ## Trace correlation in logs
 
 Backplane carries trace identity through the active
-``ServiceContext`` via ``LoggingTraceContext``. The active
-``StructuredLogProfile``'s
+`ServiceContextModule.ServiceContext` via ``LoggingTraceContext``.
+The active ``StructuredLogProfile``'s
 ``StructuredLogProfile/traceCorrelation`` formatter decides what to
 emit:
 
@@ -159,9 +162,9 @@ emit:
   trace IDs in logs should attach a `Logger.MetadataProvider` (e.g.
   swift-otel's `OTel.makeLoggingMetadataProvider()`) to
   ``BootstrapPlan/loggerMetadataProvider``.
-- The `.gcp(projectID:)` profile (in ``BackplaneGCP``) emits the
-  three magic Cloud Logging keys so the "view trace" link
-  renders next to each log entry.
+- The `.gcp(projectID:)` profile (in the `BackplaneGCP` product)
+  emits the three magic Cloud Logging keys so the "view trace"
+  link renders next to each log entry.
 - Custom profiles can emit Datadog/ECS/your-platform-of-choice
   shapes.
 
@@ -184,7 +187,7 @@ Backplane itself adds essentially no per-request overhead — it's
 all setup-time orchestration. Sizing concerns live in your
 services:
 
-- Postgres pool size: ``BackplanePostgres`` exposes
+- Postgres pool size: `BackplanePostgres` exposes
   `pool.minimumConnections`, `pool.maximumConnections`,
   `pool.connectionIdleTimeoutSeconds`, plus
   `connectTimeoutSeconds` and `statementTimeoutSeconds`.
@@ -199,10 +202,10 @@ The same binary deploys to several runtimes; the distinguishing
 work is which traits you enable and how `bootstrap(...)` builds
 the plan:
 
-- ``BackplaneGCP`` — Cloud Run / Cloud Run Jobs / GKE: enable the
-  `GCP` trait and use ``BackplaneGCP/cloudRunOrStream`` to wire
+- `BackplaneGCP` — Cloud Run / Cloud Run Jobs / GKE: enable the
+  `GCP` trait and use `BackplaneGCP.cloudRunOrStream` to wire
   Cloud Logging + Cloud Trace correlation.
-- ``BackplaneOTel`` — any runtime with an OpenTelemetry collector
+- `BackplaneOTel` — any runtime with an OpenTelemetry collector
   reachable on the network: enable the `OTel` trait and call
   `BackplaneOTel.makeBootstrap(serviceName:tracing:metrics:)`.
 - For AWS / Datadog / Honeycomb: build a custom

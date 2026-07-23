@@ -99,8 +99,11 @@ read-time access via the normal `ConfigReader`).
 
 None unless they opt in. The introduction of BackplaneVault leaves the
 existing `ConfigReader` story unchanged for consumers that don't
-import it. The Backplane `ServiceContext` gains an optional
-`configStore: ConfigStore?` property (see §7 below) that is `nil` for
+import it. As part of the (future) Backplane integration, the
+Backplane `ServiceContext` would gain an optional
+`configStore: ConfigStore?` property (see §7 below — not yet
+implemented; the vault target currently has no dependency on, or
+integration with, the `Backplane` library) that is `nil` for
 consumers without BackplaneVault.
 
 ---
@@ -252,9 +255,11 @@ public struct ConfigStore: Sendable {
 ```
 
 The API is deliberately small. Writes are async because file I/O is
-serialised by the actor backend; reads are sync because they hit a
-thread-safe in-memory provider. Scoping is a value-type operation —
-no actor hop, just a different prefix on the shared backend.
+serialised by the actor backend — and, since 1.3.0, because each write
+also takes a cross-process file lock (§3.5); reads are sync because
+they hit a thread-safe in-memory provider. Scoping is a value-type
+operation — no actor hop, just a different prefix on the shared
+backend.
 
 ### 2.3 `DecryptingConfigProvider` — the swift-configuration adapter
 
@@ -372,7 +377,7 @@ dependencies: [
     // ... existing dependencies ...
     .package(
         url: "https://github.com/apple/swift-crypto.git",
-        from: "3.10.0"
+        from: "4.0.0"
     ),
 ],
 targets: [
@@ -380,7 +385,7 @@ targets: [
     .target(
         name: "BackplaneVault",
         dependencies: [
-            "Backplane",
+            // Note: deliberately NO dependency on "Backplane" — §7.4.
             .product(name: "Configuration", package: "swift-configuration"),
             .product(
                 name: "Crypto",
@@ -439,17 +444,24 @@ file-backed value, exactly as a vanilla `ConfigReader` would behave.
 
 ### 3.2 The write path
 
-All writes are `async`. The backend is an internal actor that
-serialises:
+All writes are `async`. The backend is an internal actor; each write
+is a **locked read-merge-write** (the lock is §3.5's `FileLock`):
 
-1. Update the `MutableInMemoryProvider` (immediate; subsequent reads
-   see the new value).
-2. Update an internal `[String: Any]` mirror of the on-disk values.
-3. Atomically write the mirror to the JSON file via
-   `Data.write(...options: .atomic)` — temp file + `rename(2)`.
+1. Acquire the file's cross-process lock.
+2. Re-read the JSON file fresh from disk.
+3. Apply the single key change to that fresh state.
+4. Atomically write the result via `Data.write(...options: .atomic)`
+   — temp file + `rename(2)` — and release the lock.
+5. Refresh the `MutableInMemoryProvider` and the internal
+   `[String: Any]` mirror from the merged result, then re-assert the
+   written key with the caller-declared secrecy flag.
+
+The in-memory state is deliberately **never** the source of a file
+write. An earlier design rewrote the whole file from the actor's
+in-memory mirror; §3.5 explains why that was replaced.
 
 A `setSecret(_:forKey:)` call invokes `encryption.encrypt(_:)`
-*before* both writes, so the in-memory provider holds the ciphertext
+*before* the write, so the in-memory provider holds the ciphertext
 just like the file does. The `DecryptingConfigProvider` decrypts on
 read. Plaintext exists only:
 
@@ -474,10 +486,84 @@ try await store.set("…", forKey: "a")
 try await store.set("…", forKey: "b")
 ```
 
-Each `set` performs one file write. For atomicity across multiple
-keys, a `transaction { store in … }` API would consolidate into one
-file write at the end. Currently deferred to §9 — Acumen has not
-needed it. Adding it later is non-breaking.
+Each `set` performs one independently-locked file write (§3.2) —
+there is no cross-key transaction, and an interleaved writer may land
+between two `set` calls (per-key last-writer-wins, §3.5). For
+atomicity across multiple keys, a `transaction { store in … }` API
+would consolidate into one locked write at the end. Currently
+deferred to §9 — Acumen has not needed it. Adding it later is
+non-breaking.
+
+### 3.5 Concurrent stores on one file — `FileLock`
+
+The original write path rewrote the entire file from the backend's
+in-memory mirror, loaded once at init. Two stores on one file — in
+one process or two — therefore raced destructively: whichever wrote
+*last* erased every key the other had written since the loser's
+snapshot was taken. This is not hypothetical; it is exactly how a
+HAP bridge's pairing record was destroyed in production in July 2026
+(a frequently-writing store held a snapshot that predated another
+store's `hapPairings` write; its next write deleted the pairing, and
+the bridge advertised unpaired until a manual re-pair). Concurrent
+same-file stores are *by design* in Acumen's daemon topology — the
+supervisor daemon and the home process deliberately build stores on
+the same files — and also occur with overlapping dev runs and admin
+CLIs running beside a live service (§0's third consumer).
+
+The fix has two halves:
+
+**Merge, don't mirror.** §3.2's read-merge-write means a write can
+only ever change its own key. Staleness in the in-memory mirror can
+delay read visibility, but it can never destroy another writer's
+keys.
+
+**`FileLock` — advisory `flock(2)` on a sidecar.** The
+read-merge-write itself must be atomic against other writers, so each
+write holds an exclusive lock for its duration. Design decisions,
+each load-bearing:
+
+- **Sidecar file (`<file>.lock`), never the data file.** Atomic
+  writes swap inodes via `rename(2)`; a lock held on the data file's
+  descriptor would silently stop excluding anyone who re-opened the
+  path after the swap. The sidecar's inode is stable, so the lock is
+  meaningful across replacements. The sidecar is created `0o600` and
+  intentionally never unlinked — deleting a lock file while another
+  process is opening it hands out locks on two different inodes,
+  which is the race the lock exists to prevent.
+- **`flock(2)`, not `fcntl(F_SETLK)`.** `flock` locks belong to the
+  open file description, so two descriptors in *one* process exclude
+  each other — which matters because the backend actor only
+  serialises writes within a single store instance; two
+  `ConfigStore`s on one file in one process are otherwise
+  unsynchronised. (POSIX `fcntl` locks are per-process and would
+  silently self-grant.) `flock` also dies with its holder, so a
+  crashed process can never wedge the file permanently.
+- **Bounded, non-blocking acquisition.** Acquisition polls
+  `LOCK_EX | LOCK_NB` against a deadline (default 5 s, 10 ms
+  interval) with `Task.sleep` between attempts — no thread is parked
+  in a blocking syscall, and a wedged lock-holder produces a
+  descriptive `FileLockError.timedOut` instead of hanging every
+  writer forever. A thread-blocking variant (`acquireBlocking`)
+  exists for synchronous callers such as `ConfigWriter.merge`, which
+  now routes through the same locked core instead of its own
+  unlocked read-merge-write.
+- **`reload()` takes the same lock**, so a reload cannot observe a
+  concurrent writer's intermediate state.
+
+**The guarantee, precisely.** *No lost keys*, with per-key
+last-writer-wins. This is not snapshot isolation and not multi-key
+transactionality: two processes writing the *same* key still resolve
+to whichever committed last, and reads still serve from the store's
+in-memory state — deterministic visibility of another process's
+writes requires `reload()` (a local write opportunistically refreshes
+from the merged file as a side effect). That guarantee is exactly
+what the incident required — a writer must never *destroy* what it
+didn't write — without promising cross-process cache coherence the
+read path can't cheaply provide.
+
+`FileLock` is public: consumers with their own whole-document files
+(device maps, user registries) can reuse the primitive rather than
+reinventing the sidecar/flock/bounded-wait reasoning above.
 
 ---
 
@@ -527,7 +613,10 @@ BackplaneVault writes JSON files. Specifically:
 - Atomic writes via `Data.write(to:options: .atomic)`. The temp-file
   + `rename(2)` pattern ensures a crashed write never leaves the file
   half-written; a reader observing the file mid-write sees either the
-  old version or the new, never a partial blob.
+  old version or the new, never a partial blob. Note what atomicity
+  does *not* buy: protection against lost updates between two
+  writers — that comes from the per-write file lock and merge
+  semantics of §3.2/§3.5.
 - `0o600` permissions (owner read+write only). Even though secrets are
   encrypted at rest, defence-in-depth says other local users shouldn't
   be able to read the file.
@@ -673,7 +762,13 @@ the protocol design admits it.
 
 ### 7.1 `ServiceContext.configStore`
 
-Backplane's `ServiceContext` (see `backplane.md` §2.7) gains
+> **Status:** §7 as a whole is the *planned* Backplane integration —
+> none of it has shipped. As of 1.3.0 there is no
+> `ServiceContext.configStore`, no `ConfigStore.changes` stream, and
+> no `watch:` constructor; BackplaneVault stands alone on
+> swift-configuration (§7.4 is the part that is true today).
+
+Backplane's `ServiceContext` (see `backplane.md` §2.7) would gain
 an optional property:
 
 ```swift
@@ -722,7 +817,6 @@ struct MyApp: BackplaneApplication {
         )
     }
 
-    @ServiceGraphBuilder
     static func services() -> [EntryDescriptor] {
         // Descriptors as usual; ServiceContext.configStore is
         // populated automatically by the graph when a vault is
@@ -740,9 +834,10 @@ up; it's `ConfigStore` (non-optional) for a consumer that has.
 
 ### 7.3 Hot-reload integration with `HotReloadable`
 
-`backplane.md` §7 defines `HotReloadable.reload(config:)` — services
-that support in-place reconfiguration take a fresh `ConfigReader` and
-apply it atomically. BackplaneVault closes the loop:
+`backplane.md` §7 defines `HotReloadable.reload()` (with a
+config-taking form to follow) — services that support in-place
+reconfiguration re-read fresh configuration and apply it atomically.
+BackplaneVault would close the loop:
 
 ```swift
 extension ConfigStore {
@@ -898,9 +993,10 @@ Open sub-questions:
   back? Lean: retain old reader, log + yield a failure on a separate
   stream.
 
-**Lean:** ship in v1 without the watcher; ship watcher in v1.1 once
-the platform-abstraction story is settled. `changes` stream still
-exists in v1 but yields only on explicit `reload()`.
+**Lean:** ship without the watcher; ship it once the
+platform-abstraction story is settled. (As of 1.3.0, neither the
+watcher nor the `changes` stream has shipped — both arrive with the
+§7 Backplane integration.)
 
 ### 9.2 Key rotation
 

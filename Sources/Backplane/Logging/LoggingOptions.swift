@@ -64,7 +64,7 @@ public struct LoggingOptions: ParsableArguments, Sendable {
     }
 
     /// Returns a copy of these options with any unset CLI fields filled
-    /// from the supplied ``ConfigReader`` scope. CLI-supplied values
+    /// from the supplied `ConfigReader` scope. CLI-supplied values
     /// always win; config fills the gap when CLI was silent.
     ///
     /// Looks up these keys in the supplied scope (typical full keys
