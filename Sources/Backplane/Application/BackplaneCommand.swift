@@ -59,8 +59,12 @@ public protocol BackplaneCommand: AsyncParsableCommand {
 
     /// The service keys whose transitive dependencies will be booted
     /// before the command runs. Declared as keypaths over the
-    /// ``Services`` namespace — `\.postgres`, `\.database`, etc.
-    var requiredServices: [PartialKeyPath<Services>] { get }
+    /// ``Services`` namespace — `[\.postgres, \.database]`.
+    ///
+    /// Keys whose `Value` conforms to ``BackplaneService`` need no
+    /// `services()` entry — the framework materialises their default
+    /// descriptors (and their static dependencies') automatically.
+    var requiredServices: ServiceList { get }
 
     /// Called after all required services have been built and started.
     ///
@@ -132,8 +136,9 @@ extension BackplaneCommand {
     /// 3. Calls ``bootstrap(config:environment:)`` and applies the
     ///    returned plan via ``BootstrapCoordinator/shared``.
     /// 4. Constructs the application's root `Logger`.
-    /// 5. Calls `App.services()` to gather descriptors and builds a
-    ///    ``ServiceGraph``.
+    /// 5. Calls `App.services()` for explicit descriptors, materialises
+    ///    defaults for ``BackplaneService``-conforming keys reachable
+    ///    from ``requiredServices``, and builds a ``ServiceGraph``.
     /// 6. Creates an `ApplicationRunner` and invokes its `run`,
     ///    passing the plan's ``BootstrapPlan/lifecycleServices`` so
     ///    things like an OTel exporter run alongside graph entries.
@@ -146,7 +151,10 @@ extension BackplaneCommand {
 
         let logger = Logger(label: App.identifier)
 
-        let descriptors = App.services()
+        let descriptors = try ServiceGraph.materializedDescriptors(
+            explicit: App.services(),
+            roots: requiredServices
+        )
         let graph = try ServiceGraph(
             descriptors: descriptors,
             logger: logger,
@@ -161,7 +169,7 @@ extension BackplaneCommand {
             logger: logger
         )
 
-        let requiredCopy = requiredServices.map { AnyServiceKey(keyPath: $0) }
+        let requiredCopy = requiredServices.elements.map { AnyServiceKey(keyPath: $0) }
         let lifecycleServicesCopy = plan.lifecycleServices
 
         if lifecycleMode == .task {

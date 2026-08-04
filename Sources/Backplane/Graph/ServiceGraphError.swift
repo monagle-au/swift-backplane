@@ -62,4 +62,11 @@ public enum ServiceGraphError: Error, Sendable {
     /// constructed directly without config, but a descriptor's
     /// factory unconditionally needs one.
     case missingConfigReader(entryID: String)
+
+    /// A required key has no explicit descriptor and its `Value` does
+    /// not conform to ``BackplaneService``, so no default can be
+    /// materialised. Thrown from
+    /// ``ServiceGraph/materializedDescriptors(explicit:roots:)`` —
+    /// register the key in `services()` or conform the type.
+    case unresolvableService(id: String, valueType: String)
 }

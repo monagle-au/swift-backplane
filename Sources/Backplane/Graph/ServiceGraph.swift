@@ -132,6 +132,79 @@ public actor ServiceGraph {
         resolvedPolicies[tag] ?? .core
     }
 
+    // MARK: - Default materialisation
+
+    /// Combine explicitly registered descriptors with defaults
+    /// materialised from ``BackplaneService``-conforming keys, walking
+    /// the transitive closure of `roots`.
+    ///
+    /// The environment-model registration entry point: a command's
+    /// `requiredServices` names keys; any key whose `Value` conforms to
+    /// ``BackplaneService`` and has no explicit descriptor contributes
+    /// its ``DefaultEntryProviding/defaultDescriptor``, and its static
+    /// dependencies are walked in turn. Explicit descriptors **always
+    /// win** over defaults for the same id, and the walk continues
+    /// *through* explicit entries' keypath-declared dependencies.
+    ///
+    /// The walk is iterative with a visited set, so a dependency cycle
+    /// terminates here and is then reported precisely (with its path)
+    /// by `ServiceGraph.init`'s cycle detection.
+    ///
+    /// - Parameters:
+    ///   - explicit: descriptors from `services()` — overrides,
+    ///     protocol-key bindings, closure registrations.
+    ///   - roots: the keys to materialise from, typically a command's
+    ///     `requiredServices`. An empty list returns `explicit`
+    ///     unchanged.
+    /// - Throws: ``ServiceGraphError/unresolvableService(id:valueType:)``
+    ///   when a walked key has no explicit descriptor and its `Value`
+    ///   does not conform to ``BackplaneService``.
+    /// - Returns: `explicit` followed by materialised defaults in
+    ///   discovery order.
+    public static func materializedDescriptors(
+        explicit: [EntryDescriptor],
+        roots: ServiceList
+    ) throws -> [EntryDescriptor] {
+        var byID: [String: EntryDescriptor] = [:]
+        for descriptor in explicit {
+            byID[descriptor.id] = descriptor
+        }
+
+        var materialized: [EntryDescriptor] = []
+        var visited = Set<String>()
+        var work = roots.elements
+
+        while let keyPath = work.popLast() {
+            let value = Services()[keyPath: keyPath]
+            guard let convertible = value as? any ServiceKeyConvertible else {
+                fatalError(
+                    "PartialKeyPath<Services> at \(keyPath) does not resolve to a ServiceKey<T>. " +
+                    "Every Services extension property must return ServiceKey<Value>."
+                )
+            }
+            let id = convertible.anyServiceKey.id
+            guard visited.insert(id).inserted else { continue }
+
+            if let existing = byID[id] {
+                // Explicit wins; keep walking its keypath-declared deps
+                // so defaults behind an explicit entry still materialise.
+                work.append(contentsOf: existing.dependencyKeyPaths.elements)
+            } else if let providing = value as? any DefaultEntryProviding {
+                let descriptor = providing.defaultDescriptor
+                byID[id] = descriptor
+                materialized.append(descriptor)
+                work.append(contentsOf: descriptor.dependencyKeyPaths.elements)
+            } else {
+                throw ServiceGraphError.unresolvableService(
+                    id: id,
+                    valueType: String(describing: type(of: value))
+                )
+            }
+        }
+
+        return explicit + materialized
+    }
+
     // MARK: - Validation
 
     /// Check every descriptor's declared dependencies for unknown ids,
