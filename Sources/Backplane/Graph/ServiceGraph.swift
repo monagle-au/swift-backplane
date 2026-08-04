@@ -355,6 +355,14 @@ public actor ServiceGraph {
 
     // MARK: - Context construction
 
+    /// The application reader scoped to an entry id — the reader entry
+    /// factories receive via ``BackplaneContext/config`` and
+    /// ``HotReloadable/reload(config:)`` receives on reload. Nil when
+    /// the graph was constructed without a config.
+    nonisolated private func scopedConfig(for id: String) -> ConfigReader? {
+        config?.scoped(to: ConfigKey(id))
+    }
+
     /// Build a ``BackplaneContext`` for a factory invocation.
     ///
     /// Called from both ``bootEntry(_:)`` and the restart task. Nonisolated
@@ -381,7 +389,7 @@ public actor ServiceGraph {
             logger: entryLogger,
             lifecycle: entry.lifecycle(in: self),
             health: reporter,
-            config: config?.scoped(to: ConfigKey(entry.descriptor.id)),
+            config: scopedConfig(for: entry.descriptor.id),
             rootConfig: config,
             graph: self
         )
@@ -1046,8 +1054,13 @@ public actor ServiceGraph {
             return
         }
 
+        // Hand the service the same entry-scoped reader its factory saw.
+        // A config-less graph passes an empty reader — every key reads
+        // as absent, and the protocol keeps a non-optional signature.
+        let reader = scopedConfig(for: entry.descriptor.id)
+            ?? ConfigReader(provider: InMemoryProvider(values: [:]))
         do {
-            try await reloadable.reload()
+            try await reloadable.reload(config: reader)
             logger?.debug("reload(at:) '\(id)' succeeded; entry stays \(entry.currentState)")
         } catch {
             entry.transition(to: .degraded(fault: ServiceFault(from: error)))

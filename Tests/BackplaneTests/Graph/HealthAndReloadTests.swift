@@ -7,6 +7,7 @@
 //  - `HotReloadable` — in-place reconfiguration without replacement.
 //
 
+import Configuration
 import Foundation
 import Synchronization
 import Testing
@@ -26,17 +27,20 @@ private final class HealthAwareService: ManagedService, @unchecked Sendable {
     func shutdown() async { }
 }
 
-/// A `HotReloadable` service with observable `reloadWasCalled` / count.
+/// A `HotReloadable` service with observable `reloadCallCount` and the
+/// last config value it was handed.
 private final class ReloadableService: ManagedService, HotReloadable, @unchecked Sendable {
     let instanceID = UUID()
     private(set) var reloadCallCount = 0
+    private(set) var lastReloadMode: String?
     var shouldThrowOnReload = false
 
     func start() async throws { }
     func shutdown() async { }
 
-    func reload() async throws {
+    func reload(config: ConfigReader) async throws {
         reloadCallCount += 1
+        lastReloadMode = config.string(forKey: "mode")
         if shouldThrowOnReload {
             throw ReloadFailure()
         }
@@ -174,7 +178,35 @@ struct HealthAndReloadTests {
                 "reload must not produce a new generation; instanceID should match")
         #expect(after.reloadCallCount == 1,
                 "reload() should have been called once; got \(after.reloadCallCount)")
+        #expect(after.lastReloadMode == nil,
+                "a config-less graph must pass an empty reader — keys read as absent")
         #expect(graph.state(of: key.id) == .running)
+    }
+
+    // MARK: Test 4b — reload(config:) receives the entry-scoped reader
+
+    @Test("reload(config:) receives the reader scoped to the entry id")
+    func testReloadReceivesEntryScopedConfig() async throws {
+        let config = ConfigReader(provider: InMemoryProvider(values: [
+            "reloadable.mode": .init(.string("fast"), isSecret: false),
+        ]))
+
+        let key = ServiceKey<ReloadableService>(id: "reloadable")
+        let graph = try ServiceGraph(
+            descriptors: [
+                EntryDescriptor(key, subgroup: .integrations) { _ in
+                    ReloadableService()
+                },
+            ],
+            config: config
+        )
+        try await graph.boot()
+
+        await graph.reload(at: key.id)
+
+        let svc = graph.resolve(key)!
+        #expect(svc.lastReloadMode == "fast",
+                "reload(config:) must see reloadable.mode as mode — same scope the factory saw")
     }
 
     // MARK: Test 5 — non-HotReloadable falls back to restart
@@ -206,6 +238,44 @@ struct HealthAndReloadTests {
         let gen2 = graph.resolve(key)!.instanceID
         #expect(gen1 != gen2,
                 "non-HotReloadable reload should fall back to restart and produce a new generation")
+    }
+
+    // MARK: Test 5b — fallback escalates through the descriptor strategy
+
+    /// The reload fallback goes through restart(at:), which honours the
+    /// descriptor's declared strategy — including coldRestart.
+    @Test("reload(at:) fallback on a coldRestart entry replaces old-before-new")
+    func testReloadFallbackHonoursColdRestart() async throws {
+        let events = Mutex<[String]>([])
+
+        final class LoggingService: ManagedService, @unchecked Sendable {
+            let instanceID = UUID()
+            let onShutdown: @Sendable () -> Void
+            init(onShutdown: @escaping @Sendable () -> Void) { self.onShutdown = onShutdown }
+            func start() async throws {}
+            func shutdown() async { onShutdown() }
+        }
+
+        let key = ServiceKey<LoggingService>(id: "cold")
+        let graph = try ServiceGraph(descriptors: [
+            EntryDescriptor(key, subgroup: .integrations, replacement: .coldRestart) { _ in
+                events.withLock { $0.append("factory") }
+                return LoggingService(onShutdown: {
+                    events.withLock { $0.append("shutdown") }
+                })
+            },
+        ])
+        try await graph.boot()
+        let gen1 = graph.resolve(key)!.instanceID
+
+        await graph.reload(at: key.id)
+        try await waitFor(key.id, in: graph) { state in
+            state == .running && graph.resolve(key)?.instanceID != gen1
+        }
+
+        let log = events.withLock { $0 }
+        #expect(log == ["factory", "shutdown", "factory"],
+                "fallback must run the descriptor's coldRestart: old shutdown before new factory; got \(log)")
     }
 
     // MARK: Test 6 — reload() throwing transitions entry to .degraded
