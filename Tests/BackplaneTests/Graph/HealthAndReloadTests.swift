@@ -14,17 +14,17 @@ import Testing
 
 // MARK: - Test doubles
 
-/// A service that captures its `ServiceContext` so the test can drive
+/// A service that captures its `BackplaneContext` so the test can drive
 /// `health.markDegraded` / `markHealthy` from outside the service body.
 private final class HealthAwareService: ManagedService, @unchecked Sendable {
     let instanceID = UUID()
-    let context: ServiceContext
+    let context: BackplaneContext
 
     nonisolated var replacementStrategy: ReplacementStrategy {
         .blueGreen(grace: .milliseconds(50))
     }
 
-    init(context: ServiceContext) { self.context = context }
+    init(context: BackplaneContext) { self.context = context }
 
     func start() async throws { }
     func shutdown() async { }

@@ -177,7 +177,7 @@ struct PassiveServiceTests {
 
 // MARK: - requireConfig suite
 
-@Suite("ServiceContext.requireConfig() — config-or-throw shortcut")
+@Suite("BackplaneContext.requireConfig() — config-or-throw shortcut")
 struct RequireConfigTests {
 
     @Test("requireConfig() returns the supplied ConfigReader when present")

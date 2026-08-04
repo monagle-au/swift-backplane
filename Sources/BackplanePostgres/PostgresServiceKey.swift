@@ -106,7 +106,7 @@ extension Services {
 ///
 /// The descriptor's factory reads connection parameters from the
 /// `postgres` scope of the application's `ConfigReader` (supplied by
-/// the graph via `ServiceContext.config`). Required keys (depending
+/// the graph via `BackplaneContext.config`). Required keys (depending
 /// on connection mode):
 ///
 /// - `postgres.host` (default `"localhost"`)

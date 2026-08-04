@@ -2,7 +2,7 @@
 //  ConfigurationFlowTests.swift
 //  swift-backplane
 //
-//  Tests that ServiceContext.config carries through from
+//  Tests that BackplaneContext.config carries through from
 //  ServiceGraph.init to a factory closure and that scoped() works
 //  as expected from inside a factory.
 //
@@ -31,7 +31,7 @@ private final class ConfigCapturingService: ManagedService, @unchecked Sendable 
     func shutdown() async {}
 }
 
-@Suite("ServiceContext.config — flow into factories")
+@Suite("BackplaneContext.config — flow into factories")
 struct ConfigurationFlowTests {
 
     @Test("Factory reads the same value the graph was constructed with")

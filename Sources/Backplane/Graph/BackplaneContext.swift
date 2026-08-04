@@ -1,5 +1,5 @@
 //
-//  ServiceContext.swift
+//  BackplaneContext.swift
 //  swift-backplane
 //
 
@@ -19,7 +19,7 @@ import Logging
 /// **Naming note:** distinct from `ServiceContextModule.ServiceContext`
 /// (swift-service-context's tracing-baggage type). The two are different
 /// concepts; the 1.0 extensions on the SSWG type are preserved unchanged.
-public final class ServiceContext: Sendable {
+public final class BackplaneContext: Sendable {
 
     /// Entry identifier. Stable for the entry's lifetime.
     public let entryID: String

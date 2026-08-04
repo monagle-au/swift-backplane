@@ -8,7 +8,7 @@
 /// Produced by the `service(key:factory:)` helper and consumed by
 /// ``ServiceGraph`` at boot time. The factory is called once at first
 /// boot and again on every replacement cycle, receiving a
-/// ``ServiceContext`` for identity, logging, and cross-service
+/// ``BackplaneContext`` for identity, logging, and cross-service
 /// resolution.
 public struct EntryDescriptor: Sendable {
     /// Entry identity — drives log labels and
@@ -25,7 +25,7 @@ public struct EntryDescriptor: Sendable {
     /// that mutable state *inside* the closure (a `Mutex<State>` the
     /// closure captures, or an actor the closure calls). The graph
     /// never re-creates descriptors or swaps closures.
-    package let factory: @Sendable (ServiceContext) async throws -> any ManagedService
+    package let factory: @Sendable (BackplaneContext) async throws -> any ManagedService
 
     /// How the graph interprets `.unconfigured` for dependent callers.
     /// Defaults to ``ConfigurationRequirement/required``.
@@ -37,13 +37,13 @@ public struct EntryDescriptor: Sendable {
     package let subgroup: SubgroupTag
 
     /// Other entries this entry's factory will resolve via
-    /// ``ServiceContext/requireService(_:timeout:)``.
+    /// ``BackplaneContext/requireService(_:timeout:)``.
     ///
     /// Drives **pruning** (only entries in the transitive closure of
     /// the boot roots are booted) and **cycle detection** (at graph
     /// init). Dependencies do *not* enforce boot ordering — concurrent
     /// boot continues to use
-    /// ``ServiceContext/requireService(_:timeout:)`` as the runtime
+    /// ``BackplaneContext/requireService(_:timeout:)`` as the runtime
     /// synchronization point.
     package let dependencies: [AnyServiceKey]
 
@@ -83,7 +83,7 @@ public struct EntryDescriptor: Sendable {
         configuration: ConfigurationRequirement = .required,
         subgroup: SubgroupTag = .core,
         dependencies: [AnyServiceKey] = [],
-        factory: @escaping @Sendable (ServiceContext) async throws -> T
+        factory: @escaping @Sendable (BackplaneContext) async throws -> T
     ) {
         self.id = key.id
         self.factory = factory
@@ -113,7 +113,7 @@ public struct EntryDescriptor: Sendable {
         configuration: ConfigurationRequirement = .required,
         subgroup: SubgroupTag = .core,
         dependencies: [PartialKeyPath<Services>] = [],
-        factory: @escaping @Sendable (ServiceContext) async throws -> T
+        factory: @escaping @Sendable (BackplaneContext) async throws -> T
     ) {
         self.init(
             Services()[keyPath: keyPath],
@@ -148,7 +148,7 @@ public struct EntryDescriptor: Sendable {
         configuration: ConfigurationRequirement = .required,
         subgroup: SubgroupTag = .core,
         dependencies: [AnyServiceKey] = [],
-        passive: @escaping @Sendable (ServiceContext) async throws -> Value
+        passive: @escaping @Sendable (BackplaneContext) async throws -> Value
     ) {
         self.id = key.id
         self.factory = { context in PassiveService(try await passive(context)) }
@@ -166,7 +166,7 @@ public struct EntryDescriptor: Sendable {
         configuration: ConfigurationRequirement = .required,
         subgroup: SubgroupTag = .core,
         dependencies: [PartialKeyPath<Services>] = [],
-        passive: @escaping @Sendable (ServiceContext) async throws -> Value
+        passive: @escaping @Sendable (BackplaneContext) async throws -> Value
     ) {
         self.init(
             Services()[keyPath: keyPath],
@@ -199,7 +199,7 @@ public struct EntryDescriptor: Sendable {
         configuration: ConfigurationRequirement = .required,
         subgroup: SubgroupTag = .core,
         dependencies: [AnyServiceKey] = [],
-        factory: @escaping @Sendable (ServiceContext) async throws -> Service,
+        factory: @escaping @Sendable (BackplaneContext) async throws -> Service,
         as project: @escaping @Sendable (Service) -> Value
     ) {
         self.id = key.id
@@ -218,7 +218,7 @@ public struct EntryDescriptor: Sendable {
         configuration: ConfigurationRequirement = .required,
         subgroup: SubgroupTag = .core,
         dependencies: [PartialKeyPath<Services>] = [],
-        factory: @escaping @Sendable (ServiceContext) async throws -> Service,
+        factory: @escaping @Sendable (BackplaneContext) async throws -> Service,
         as project: @escaping @Sendable (Service) -> Value
     ) {
         self.init(

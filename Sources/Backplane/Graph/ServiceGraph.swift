@@ -33,7 +33,7 @@ public actor ServiceGraph {
 
     /// Application configuration reader supplied at graph construction.
     /// `nil` when the graph is built without one (most graph-machinery
-    /// unit tests). Threaded into every minted ``ServiceContext`` so
+    /// unit tests). Threaded into every minted ``BackplaneContext`` so
     /// factories can call `context.config?.scoped(to: "myservice")`.
     private let config: ConfigReader?
 
@@ -67,7 +67,7 @@ public actor ServiceGraph {
     ///   - logger: graph-level logger; `nil` silences graph diagnostics
     ///     (per-entry loggers are always constructed).
     ///   - config: application `ConfigReader` handed to factories via
-    ///     ``ServiceContext/config``; `nil` for graph-machinery tests.
+    ///     ``BackplaneContext/config``; `nil` for graph-machinery tests.
     ///   - shutdownTimeout: bound on a drained generation's
     ///     `shutdown()` before the graph cancels it.
     ///   - subgroupPolicies: per-tag overrides. Tags absent from
@@ -359,12 +359,12 @@ public actor ServiceGraph {
 
     // MARK: - Context construction
 
-    /// Build a ``ServiceContext`` for a factory invocation.
+    /// Build a ``BackplaneContext`` for a factory invocation.
     ///
     /// Called from both ``bootEntry(_:)`` and the restart task. Nonisolated
     /// because it only reads immutable graph state and the entry's own
     /// nonisolated accessors.
-    nonisolated package func makeContext(for entry: ServiceEntry) -> ServiceContext {
+    nonisolated package func makeContext(for entry: ServiceEntry) -> BackplaneContext {
         let entryLogger: Logger
         if var l = logger {
             l[metadataKey: "entry"] = "\(entry.descriptor.id)"
@@ -376,7 +376,7 @@ public actor ServiceGraph {
             entryID: entry.descriptor.id,
             graph: self
         )
-        return ServiceContext(
+        return BackplaneContext(
             entryID: entry.descriptor.id,
             logger: entryLogger,
             lifecycle: entry.lifecycle(in: self),
@@ -416,7 +416,7 @@ public actor ServiceGraph {
     /// **Note on ordering.** Dependencies drive pruning and cycle detection
     /// but do *not* enforce boot ordering. Entries in the closure are
     /// launched concurrently and use
-    /// `ServiceContext.requireService(_:timeout:)` to wait for any
+    /// `BackplaneContext.requireService(_:timeout:)` to wait for any
     /// dependencies their factories actually need. A future slice may
     /// add wave-based parallel ordering as an efficiency.
     public func boot(roots: [AnyServiceKey]? = nil) async throws {

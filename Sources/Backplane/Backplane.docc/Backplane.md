@@ -60,7 +60,7 @@ integrations they don't use.
 - ``Services``
 - ``AnyServiceKey``
 - ``ServiceKeyConvertible``
-- ``ServiceContext``
+- ``BackplaneContext``
 - ``ServiceState``
 - ``ServiceFault``
 - ``ServiceGraphError``

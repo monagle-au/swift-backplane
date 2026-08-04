@@ -140,7 +140,7 @@ for you. See <doc:KeyConcepts> for the three registration forms.
 
 Tasks share the same descriptors but exit when their work is done.
 Implement ``TaskCommand`` and supply `execute(with:)` — the
-``ServiceContext`` argument resolves services by keypath:
+``BackplaneContext`` argument resolves services by keypath:
 
 ```swift
 struct PrintHello: TaskCommand {
@@ -152,7 +152,7 @@ struct PrintHello: TaskCommand {
 
     var requiredServices: [PartialKeyPath<Services>] { [] }
 
-    func execute(with context: ServiceContext) async throws {
+    func execute(with context: BackplaneContext) async throws {
         context.logger.info("Hello from \(MyApp.identifier).")
     }
 }

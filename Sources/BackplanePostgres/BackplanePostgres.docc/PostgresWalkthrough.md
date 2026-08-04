@@ -112,7 +112,7 @@ struct ListUsers: TaskCommand {
     static let configuration = CommandConfiguration(commandName: "list-users")
     var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
 
-    func execute(with context: ServiceContext) async throws {
+    func execute(with context: BackplaneContext) async throws {
         let pg = try await context.requireService(\.postgres)
         let rows = try await pg.client.query(
             "SELECT id, email FROM users ORDER BY id LIMIT 100",
@@ -163,7 +163,7 @@ struct Migrate: TaskCommand {
     static let configuration = CommandConfiguration(commandName: "migrate")
     var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
 
-    func execute(with context: ServiceContext) async throws {
+    func execute(with context: BackplaneContext) async throws {
         let pg = try await context.requireService(\.postgres)
         try await PostgresMigrator.migrate(
             [CreateUsers()],

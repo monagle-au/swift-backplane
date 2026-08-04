@@ -49,7 +49,7 @@ struct ApplicationRunner: Sendable {
         requiredServices: [AnyServiceKey],
         mode: ServiceLifecycleMode = .persistent,
         lifecycleServices: [LifecycleService] = [],
-        execute: (@Sendable (ServiceContext) async throws -> Void)? = nil
+        execute: (@Sendable (BackplaneContext) async throws -> Void)? = nil
     ) async throws {
         // Configure the graph's boot roots so its `run()` boots only
         // the transitive closure of `requiredServices`. Don't drive
@@ -97,13 +97,13 @@ struct ApplicationRunner: Sendable {
         try await ServiceGroup(configuration: groupConfig).run()
     }
 
-    /// Construct a command-scoped ``ServiceContext`` for passing to a
+    /// Construct a command-scoped ``BackplaneContext`` for passing to a
     /// task command's `execute(with:)`. The lifecycle/health surfaces
     /// are no-ops — a command is not an entry in the graph; the only
     /// meaningful operations are `service(_:)` / `requireService(_:)`
     /// forwarded to the graph.
-    private func makeCommandContext() -> ServiceContext {
-        ServiceContext(
+    private func makeCommandContext() -> BackplaneContext {
+        BackplaneContext(
             entryID: "command:\(identifier)",
             logger: logger,
             lifecycle: CommandLifecycleHandle(),
@@ -116,7 +116,7 @@ struct ApplicationRunner: Sendable {
 
 // MARK: - Command-scoped no-op handles
 
-/// Lifecycle handle used for the command-scoped ``ServiceContext``. The
+/// Lifecycle handle used for the command-scoped ``BackplaneContext``. The
 /// command isn't an entry in the graph; this handle reports `.running`
 /// and ignores restart requests.
 private struct CommandLifecycleHandle: ServiceLifecycleHandle {
@@ -134,7 +134,7 @@ private struct CommandLifecycleHandle: ServiceLifecycleHandle {
     }
 }
 
-/// Health reporter used for the command-scoped ``ServiceContext``. The
+/// Health reporter used for the command-scoped ``BackplaneContext``. The
 /// command isn't an entry in the graph; nothing observes its health.
 private struct CommandHealthReporter: ServiceHealthReporter {
     nonisolated func markDegraded(fault: ServiceFault) {

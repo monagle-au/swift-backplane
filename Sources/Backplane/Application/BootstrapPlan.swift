@@ -16,7 +16,7 @@ import ServiceLifecycle
 ///
 /// Lifecycle services are not registered through the ``ServiceGraph``
 /// because they're not addressed by a ``ServiceKey`` — user code doesn't
-/// resolve them via a ``ServiceContext``. They're started by
+/// resolve them via a ``BackplaneContext``. They're started by
 /// `ApplicationRunner` before the user's required services so that
 /// telemetry is flowing as soon as the application's own services come up.
 public struct LifecycleService: Sendable {

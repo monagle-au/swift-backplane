@@ -52,7 +52,7 @@ hooks the framework needs:
   tracing systems. Called after CLI parsing, before any `Logger`
   is constructed. Default returns an empty plan.
 - **`execute(with:)`** — for ``TaskCommand``: the work to do once
-  services are up, receiving a ``ServiceContext`` for resolution.
+  services are up, receiving a ``BackplaneContext`` for resolution.
   For ``PersistentCommand``: defaulted to a no-op.
 
 Two specialisations capture the common shapes:
@@ -148,7 +148,7 @@ types that won't survive as a stored property, erase through
 ### Resolution
 
 Factories and task commands resolve dependencies through the
-``ServiceContext`` they receive:
+``BackplaneContext`` they receive:
 
 ```swift
 let db = try await context.requireService(\.database)   // waits, throws
@@ -160,16 +160,16 @@ if let cache = context.service(\.cache) { ... }         // sync, optional
 unless the entry currently has a live instance. Failures surface
 as ``ServiceGraphError``.
 
-## ServiceContext
+## BackplaneContext
 
 Each factory (and a task command's `execute`) receives a
-``ServiceContext`` scoped to its entry: `entryID`, a pre-scoped
+``BackplaneContext`` scoped to its entry: `entryID`, a pre-scoped
 `logger`, the application `config` reader (`requireConfig()` for
 the non-optional form), the entry's ``ServiceLifecycleHandle``,
 a ``ServiceHealthReporter`` for self-reported degradation, and
 the resolution methods above.
 
-> Note: Backplane's ``ServiceContext`` class is distinct from
+> Note: Backplane's ``BackplaneContext`` class is distinct from
 > `ServiceContextModule.ServiceContext`, swift-service-context's
 > task-local baggage type. Backplane also extends the latter with
 > `active`, `environment`, `logger`, and `loggingTraceContext`
