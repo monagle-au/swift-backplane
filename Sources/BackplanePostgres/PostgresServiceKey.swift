@@ -12,7 +12,7 @@ import Synchronization
 
 // MARK: - BackplanePostgresService
 
-/// `ManagedService` wrapper around `PostgresClient`.
+/// `BackplaneService` wrapper around `PostgresClient`.
 ///
 /// The underlying `PostgresClient` is a `ServiceLifecycle.Service`
 /// whose `run()` opens connections and stays running for the lifetime
@@ -22,6 +22,33 @@ import Synchronization
 /// returns immediately; `shutdown()` cancels the task and awaits its
 /// termination.
 ///
+/// Because the type conforms to `BackplaneService`, declaring
+/// `\.postgres` in a command's `requiredServices` is all it takes — no
+/// `services()` entry needed. ``make(context:)`` reads connection
+/// parameters from the entry's config scope (the entry id, `postgres.*`
+/// for the stock key). Required keys (depending on connection mode):
+///
+/// - `postgres.host` (default `"localhost"`)
+/// - `postgres.port` (default `5432`)
+/// - `postgres.username` (default `"postgres"`)
+/// - `postgres.password`
+/// - `postgres.database`
+/// - `postgres.unixSocketPath` (optional, mutually exclusive with host/port)
+///
+/// TLS options are read from `postgres.tls.*`. See
+/// `Postgres+Config.swift` for the full set.
+///
+/// **Multi-instance:** register a second key with a different id and
+/// the same type — its entry reads its own config scope:
+///
+/// ```swift
+/// extension Services {
+///     public var analyticsDB: ServiceKey<BackplanePostgresService> {
+///         ServiceKey(id: "analytics")     // reads analytics.host, …
+///     }
+/// }
+/// ```
+///
 /// **Readiness:** `PostgresClient.run()` has no "client is ready"
 /// signal. `start()` returns once the run task has been scheduled, not
 /// once a connection has been established. Code resolving the client
@@ -29,7 +56,7 @@ import Synchronization
 /// first connection is established. For production wiring, a thin
 /// supervisor task can verify readiness (e.g. `SELECT 1`) and gate
 /// dependent services with `HotReloadable`.
-public final class BackplanePostgresService: ManagedService, @unchecked Sendable {
+public final class BackplanePostgresService: BackplaneService, @unchecked Sendable {
     /// The wrapped `PostgresClient`. Resolve the service via
     /// ``Backplane/Services/postgres`` and access this property to drive queries.
     ///
@@ -48,6 +75,16 @@ public final class BackplanePostgresService: ManagedService, @unchecked Sendable
 
     public init(client: PostgresClient) {
         self.client = client
+    }
+
+    /// Build a client from the entry's config scope. The reader in
+    /// `context.config` is already scoped to the entry id, so the same
+    /// type serves any number of keys, each with its own scope.
+    public static func make(context: BackplaneContext) async throws -> BackplanePostgresService {
+        let config = try context.requireConfig()
+        let pgConfig = PostgresClient.Configuration(config: config)
+        let client = PostgresClient(configuration: pgConfig, backgroundLogger: context.logger)
+        return BackplanePostgresService(client: client)
     }
 
     /// Spawn the underlying client's run loop. Returns immediately.
@@ -80,70 +117,25 @@ public final class BackplanePostgresService: ManagedService, @unchecked Sendable
 extension Services {
     /// Service key for ``BackplanePostgresService``.
     ///
-    /// Resolve via keypath from inside a service factory or task
-    /// command:
+    /// The type conforms to `BackplaneService`, so naming this key in a
+    /// command's `requiredServices` is the entire registration:
     ///
     /// ```swift
+    /// var requiredServices: ServiceList { [\.postgres] }
+    ///
+    /// // …
     /// let pg = try await context.requireService(\.postgres)
     /// let result = try await pg.client.query("SELECT 1")
     /// ```
+    ///
+    /// To override the default subgroup or replacement strategy, add an
+    /// explicit descriptor to `services()`:
+    ///
+    /// ```swift
+    /// EntryDescriptor(\.postgres, subgroup: .integrations)
+    /// ```
     public var postgres: ServiceKey<BackplanePostgresService> {
         ServiceKey(id: "postgres")
-    }
-
-    /// Deprecated alias for ``postgres``. Renamed in 1.1.0 to drop the
-    /// `Key` suffix; both resolve the same entry (`id: "postgres"`).
-    /// Removed in 2.0.0.
-    @available(*, deprecated, renamed: "postgres")
-    public var postgresKey: ServiceKey<BackplanePostgresService> {
-        postgres
-    }
-}
-
-// MARK: - Descriptor
-
-/// Build an `EntryDescriptor` for a Postgres client.
-///
-/// The descriptor's factory reads connection parameters from the
-/// `postgres` scope of the application's `ConfigReader` (supplied by
-/// the graph via `BackplaneContext.config`). Required keys (depending
-/// on connection mode):
-///
-/// - `postgres.host` (default `"localhost"`)
-/// - `postgres.port` (default `5432`)
-/// - `postgres.username` (default `"postgres"`)
-/// - `postgres.password`
-/// - `postgres.database`
-/// - `postgres.unixSocketPath` (optional, mutually exclusive with host/port)
-///
-/// TLS options are read from `postgres.tls.*`. See
-/// `Postgres+Config.swift` for the full set.
-///
-/// ```swift
-/// static func services() -> [EntryDescriptor] {
-///     [postgresEntryDescriptor()]
-/// }
-/// ```
-///
-/// - Parameters:
-///   - subgroup: subgroup tag for failure-policy partitioning.
-///     Defaults to `SubgroupTag.core`.
-///   - dependencies: other entries this Postgres service's factory
-///     resolves through `context.requireService(_:)`.
-public func postgresEntryDescriptor(
-    subgroup: SubgroupTag = .core,
-    dependencies: [PartialKeyPath<Services>] = []
-) -> EntryDescriptor {
-    EntryDescriptor(
-        \.postgres,
-        subgroup: subgroup,
-        dependencies: dependencies
-    ) { context in
-        // context.config is already scoped to the entry id ("postgres").
-        let config = try context.requireConfig()
-        let pgConfig = PostgresClient.Configuration(config: config)
-        let client = PostgresClient(configuration: pgConfig, backgroundLogger: context.logger)
-        return BackplanePostgresService(client: client)
     }
 }
 
