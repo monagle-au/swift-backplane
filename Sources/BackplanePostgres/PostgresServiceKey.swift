@@ -139,7 +139,8 @@ public func postgresEntryDescriptor(
         subgroup: subgroup,
         dependencies: dependencies
     ) { context in
-        let config = try context.requireConfig().scoped(to: "postgres")
+        // context.config is already scoped to the entry id ("postgres").
+        let config = try context.requireConfig()
         let pgConfig = PostgresClient.Configuration(config: config)
         let client = PostgresClient(configuration: pgConfig, backgroundLogger: context.logger)
         return BackplanePostgresService(client: client)

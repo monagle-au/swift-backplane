@@ -127,6 +127,41 @@ struct ApplicationRunnerIntegrationTests {
                 "both services should shut down — got \(snapshot.shutdownIDs)")
     }
 
+    // MARK: Test 1b — command context config is root-scoped
+
+    /// Unlike entry contexts (scoped to the entry id), the command's
+    /// context reads the full key space — scoping to "command:test-app"
+    /// would be nonsense.
+    @Test("Task mode: command context config is unscoped")
+    func taskModeCommandContextConfigIsRootScoped() async throws {
+        let config = ConfigReader(provider: InMemoryProvider(values: [
+            "myService.host": .init(.string("example.com"), isSecret: false),
+        ]))
+
+        let key = ServiceKey<IntegrationRecordingService>(id: "svc")
+        let observer = IntegrationRecordingObserver()
+
+        let (runner, _) = try makeRunner(
+            descriptors: [
+                EntryDescriptor(key) { _ in
+                    IntegrationRecordingService(id: "svc", observer: observer)
+                },
+            ],
+            config: config
+        )
+
+        try await runner.run(
+            requiredServices: [],
+            mode: .task,
+            lifecycleServices: [],
+            execute: { context in
+                #expect(context.config?.string(forKey: "myService.host") == "example.com",
+                        "command context config must be root-scoped")
+                #expect(context.rootConfig?.string(forKey: "myService.host") == "example.com")
+            }
+        )
+    }
+
     // MARK: Test 2 — PersistentCommand mode shuts down on outer cancellation
 
     @Test("Persistent mode: services run until the surrounding task is cancelled")

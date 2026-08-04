@@ -372,12 +372,17 @@ public actor ServiceGraph {
             entryID: entry.descriptor.id,
             graph: self
         )
+        // The context's reader is scoped to the entry id — an entry
+        // "postgres" reads `postgres.host` as `host`, and the same
+        // service type under two keys reads two scopes. The unscoped
+        // reader rides along as `rootConfig`.
         return BackplaneContext(
             entryID: entry.descriptor.id,
             logger: entryLogger,
             lifecycle: entry.lifecycle(in: self),
             health: reporter,
-            config: config,
+            config: config?.scoped(to: ConfigKey(entry.descriptor.id)),
+            rootConfig: config,
             graph: self
         )
     }
