@@ -20,10 +20,6 @@ private final class HealthAwareService: ManagedService, @unchecked Sendable {
     let instanceID = UUID()
     let context: BackplaneContext
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     init(context: BackplaneContext) { self.context = context }
 
     func start() async throws { }
@@ -35,10 +31,6 @@ private final class ReloadableService: ManagedService, HotReloadable, @unchecked
     let instanceID = UUID()
     private(set) var reloadCallCount = 0
     var shouldThrowOnReload = false
-
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
 
     func start() async throws { }
     func shutdown() async { }

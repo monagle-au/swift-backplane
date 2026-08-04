@@ -57,8 +57,9 @@ package final class ServiceEntry: Sendable {
     ///
     /// Returns non-nil during `.starting`, `.running`, `.degraded`, and
     /// `.replacing` (the old generation serves throughout a blue-green
-    /// swap). Returns nil during `.unconfigured`, `.configuring`,
-    /// `.stopped`, and `.failed`.
+    /// swap). Returns nil during `.unconfigured`, `.stopped`, and
+    /// `.failed` — and during a cold-restart gap, where the entry is
+    /// `.replacing` but the active generation has been taken.
     ///
     /// The state filter matters because `active` is set *before*
     /// `start()` runs (swap-before-notify ordering — see
@@ -97,7 +98,7 @@ package final class ServiceEntry: Sendable {
         switch state {
         case .starting, .running, .degraded, .replacing:
             return true
-        case .unconfigured, .configuring, .stopped, .failed:
+        case .unconfigured, .stopped, .failed:
             return false
         }
     }
@@ -179,6 +180,23 @@ package final class ServiceEntry: Sendable {
                 old.state.withLock { $0 = .draining }
                 s.draining.append(old)
             }
+            return old
+        }
+    }
+
+    /// Take the active generation out of service without a replacement.
+    ///
+    /// The generation moves to the draining list (per-generation state
+    /// `.draining`) and `active` becomes nil, so ``currentHandle(_:)``
+    /// returns nil — the intentional cold-restart gap. Returns the taken
+    /// generation so the caller can drive its drain, or nil if nothing
+    /// was active.
+    package func takeActiveGeneration() -> Generation? {
+        _state.withLock { s in
+            guard let old = s.active else { return nil }
+            s.active = nil
+            old.state.withLock { $0 = .draining }
+            s.draining.append(old)
             return old
         }
     }

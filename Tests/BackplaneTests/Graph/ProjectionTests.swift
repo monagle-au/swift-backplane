@@ -46,10 +46,6 @@ private final class RecordingManagedService: ManagedService, Recorder, @unchecke
     var didStart: Bool { _started.withLock { $0 } }
     var didShutdown: Bool { _shutdown.withLock { $0 } }
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     func start() async throws { _started.withLock { $0 = true } }
     func shutdown() async { _shutdown.withLock { $0 = true } }
 }
@@ -57,10 +53,6 @@ private final class RecordingManagedService: ManagedService, Recorder, @unchecke
 /// A plain identity-bearing `ManagedService` for the Form 1 regression.
 private final class RegularService: ManagedService, @unchecked Sendable {
     let instanceID = UUID()
-
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
 
     func start() async throws { }
     func shutdown() async { }
@@ -135,6 +127,7 @@ struct ProjectionTests {
             EntryDescriptor(
                 key,
                 subgroup: .integrations,
+                replacement: .blueGreen(grace: .milliseconds(50)),
                 factory: { _ in RecordingManagedService() },
                 as: { $0 }
             ),

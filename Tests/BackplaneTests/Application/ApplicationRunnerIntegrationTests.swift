@@ -45,10 +45,6 @@ final class IntegrationRecordingService: ManagedService, @unchecked Sendable {
     let id: String
     let observer: IntegrationRecordingObserver
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     init(id: String, observer: IntegrationRecordingObserver) {
         self.id = id
         self.observer = observer

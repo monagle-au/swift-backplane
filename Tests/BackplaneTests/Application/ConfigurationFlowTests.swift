@@ -18,10 +18,6 @@ private final class ConfigCapturingService: ManagedService, @unchecked Sendable 
     let capturedValue: String?
     let capturedScoped: String?
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     init(capturedValue: String?, capturedScoped: String?) {
         self.capturedValue = capturedValue
         self.capturedScoped = capturedScoped

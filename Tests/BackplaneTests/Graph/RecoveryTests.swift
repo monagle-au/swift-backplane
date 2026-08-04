@@ -30,10 +30,6 @@ private final class CountdownStartService: ManagedService, @unchecked Sendable {
 
     var shutdownWasCalled: Bool { shutdownFlag.withLock { $0 } }
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     init(countdown: SharedCountdown) {
         self.countdown = countdown
     }

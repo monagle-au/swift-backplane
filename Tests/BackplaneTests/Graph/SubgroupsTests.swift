@@ -18,10 +18,6 @@ import Testing
 private final class StartFailService: ManagedService, @unchecked Sendable {
     struct StartError: Error {}
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     func start() async throws { throw StartError() }
     func shutdown() async { }
 }
@@ -32,10 +28,6 @@ private final class StartFailService: ManagedService, @unchecked Sendable {
 private final class SlowOKService: ManagedService, @unchecked Sendable {
     let instanceID = UUID()
     let delay: Duration
-
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
 
     init(delay: Duration) { self.delay = delay }
 
@@ -256,7 +248,7 @@ struct SubgroupsTests {
         let key = ServiceKey<IdentityService>(id: "integrations-entry")
 
         let graph = try ServiceGraph(descriptors: [
-            EntryDescriptor(key, subgroup: .integrations) { _ in IdentityService() },
+            EntryDescriptor(key, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50))) { _ in IdentityService() },
         ])
 
         try await graph.boot()

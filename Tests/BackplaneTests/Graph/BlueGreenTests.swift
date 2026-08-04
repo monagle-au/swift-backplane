@@ -18,10 +18,6 @@ final class TrackableService: ManagedService, @unchecked Sendable {
     private(set) var shutdownWasCalled = false
 
     // Short grace so tests complete quickly.
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     func start() async throws { }
 
     func shutdown() async {
@@ -36,10 +32,6 @@ final class StuckShutdownService: ManagedService, @unchecked Sendable {
     let instanceID = UUID()
     private(set) var shutdownWasCalled = false
     private(set) var shutdownCompletedNormally = false
-
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
 
     func start() async throws { }
 
@@ -92,7 +84,7 @@ struct BlueGreenTests {
 
         let graph = try ServiceGraph(
             descriptors: [
-                EntryDescriptor(key, subgroup: .integrations) { _ in
+                EntryDescriptor(key, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50))) { _ in
                     let s = TrackableService()
                     createdServices.withLock { $0.append(s) }
                     return s
@@ -145,7 +137,7 @@ struct BlueGreenTests {
 
         let graph = try ServiceGraph(
             descriptors: [
-                EntryDescriptor(key, subgroup: .integrations) { _ in
+                EntryDescriptor(key, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50))) { _ in
                     if shouldFail.withLock({ $0 }) {
                         throw FactoryError()
                     }
@@ -204,7 +196,7 @@ struct BlueGreenTests {
         // Very short shutdown timeout (100 ms) so the test completes quickly.
         let graph = try ServiceGraph(
             descriptors: [
-                EntryDescriptor(stuckKey, subgroup: .integrations) { _ in
+                EntryDescriptor(stuckKey, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50))) { _ in
                     let n = callNumber.withLock { n -> Int in n += 1; return n }
                     return n == 1 ? firstService : StuckShutdownService()
                 }

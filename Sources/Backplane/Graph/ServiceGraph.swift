@@ -272,12 +272,8 @@ public actor ServiceGraph {
     /// means the factory has returned and swapped the active generation;
     /// we hand it back without waiting for `start()` to finish.
     ///
-    /// `.unconfigured` remains a waiting state in the spike. The
-    /// descriptor's ``EntryDescriptor/configuration`` policy is stored
-    /// but has no behavioural effect here *yet* — that gains meaning
-    /// once factory-failure categorisation lands (a future slice that
-    /// lets a factory throw "missing config" and park the entry at
-    /// `.unconfigured` rather than `.failed`).
+    /// `.unconfigured` is a waiting state: boot hasn't reached the
+    /// entry yet, and will shortly.
     private static func awaitHandle<T: Sendable>(
         in entry: ServiceEntry,
         key: ServiceKey<T>
@@ -307,7 +303,7 @@ public actor ServiceGraph {
                 continue
             case .failed, .stopped:
                 throw ServiceGraphError.entryTerminated(id: key.id, state: state)
-            case .unconfigured, .replacing, .configuring:
+            case .unconfigured, .replacing:
                 continue
             }
         }
@@ -675,12 +671,27 @@ public actor ServiceGraph {
         entry.transition(to: .running)
     }
 
-    // MARK: - Restart (blue-green)
+    // MARK: - Restart (replacement)
 
     /// Trigger replacement of the entry at `id` using its declared strategy.
     ///
-    /// Currently only `.blueGreen` is implemented; `.hotReload` and
-    /// `.coldRestart` fall through to blue-green with a logged note.
+    /// The strategy comes from the entry's descriptor
+    /// (``EntryDescriptor``'s `replacement:` parameter) — declared at
+    /// registration and read *before* the replacement instance is
+    /// constructed:
+    ///
+    /// - ``ReplacementStrategy/blueGreen(grace:)`` — the new generation
+    ///   is built and started alongside the old; the active pointer
+    ///   swaps on success; the old generation drains for `grace`.
+    ///   Failure leaves the old generation serving and the entry
+    ///   ``ServiceState/degraded(fault:)``.
+    /// - ``ReplacementStrategy/coldRestart`` — the old generation is
+    ///   shut down *first* (zero grace, bounded by the graph's shutdown
+    ///   timeout), then the new instance is built and started. Callers
+    ///   landing in the gap see nil from ``resolve(_:)``;
+    ///   ``requireService(_:timeout:)`` callers wait through it.
+    ///   Failure leaves the entry ``ServiceState/failed(fault:)`` —
+    ///   nothing is serving — recoverable via ``recover(at:)``.
     ///
     /// The method returns immediately after transitioning the entry to
     /// `.replacing` and spawning the replacement task. Observe the
@@ -718,70 +729,147 @@ public actor ServiceGraph {
 
         // Spawn a detached replacement task so the actor is not held during
         // the potentially-slow factory() and start() calls.
-        let task = Task.detached { [logger] in
-            // Phase 1: build new instance.
-            let newInstance: any ManagedService
-            do {
-                newInstance = try await descriptor.factory(context)
-            } catch {
-                entry.transition(to: .degraded(fault: ServiceFault(from: error)))
-                logger?.error("Replacement factory failed for '\(descriptor.id)': \(error)")
-                return
+        let task: Task<Void, Never>
+        switch descriptor.replacement {
+        case .blueGreen(let grace):
+            task = Task.detached { [logger] in
+                await Self.blueGreenReplace(
+                    entry: entry, descriptor: descriptor, context: context,
+                    grace: grace, shutdownTimeout: shutdownTimeout, logger: logger
+                )
             }
-
-            guard !Task.isCancelled else {
-                entry.transition(to: .degraded(fault: ServiceFault(
-                    description: "Replacement cancelled before start",
-                    errorType: "CancellationError",
-                    firstObservedAt: .init()
-                )))
-                return
-            }
-
-            // Phase 2: start the new generation.
-            let newGen = Generation(id: entry.nextGenerationID(), instance: newInstance)
-            do {
-                try await newInstance.start()
-            } catch {
-                // Old generation continues serving.
-                entry.transition(to: .degraded(fault: ServiceFault(from: error)))
-                logger?.error("Replacement start() failed for '\(descriptor.id)': \(error)")
-                return
-            }
-
-            guard !Task.isCancelled else {
-                entry.transition(to: .degraded(fault: ServiceFault(
-                    description: "Replacement cancelled after start",
-                    errorType: "CancellationError",
-                    firstObservedAt: .init()
-                )))
-                return
-            }
-
-            // Phase 3: determine grace from the new instance's strategy.
-            let grace: Duration
-            if case .blueGreen(let g) = newInstance.replacementStrategy {
-                grace = g
-            } else {
-                // .hotReload / .coldRestart not implemented in spike; fall back.
-                grace = .seconds(30)
-                logger?.notice("'\(descriptor.id)' declared \(newInstance.replacementStrategy); spike uses blueGreen fallback.")
-            }
-
-            // Phase 4: atomic swap — new resolves get the new generation.
-            let oldGen = entry.swapActiveGeneration(to: newGen)
-            entry.transition(to: .running)
-            logger?.debug("Blue-green swap completed for '\(descriptor.id)' (gen \(newGen.id))")
-
-            // Phase 5: drain old generation (fire-and-forget from here).
-            guard let oldGen else { return }
-            Task.detached {
-                await ServiceGraph.drain(oldGen, entry: entry, grace: grace, shutdownTimeout: shutdownTimeout, logger: logger)
+        case .coldRestart:
+            task = Task.detached { [logger] in
+                await Self.coldReplace(
+                    entry: entry, descriptor: descriptor, context: context,
+                    shutdownTimeout: shutdownTimeout, logger: logger
+                )
             }
         }
 
         // Cancel any prior in-flight replacement (latest restart wins).
         entry.swapReplacementTask(task)?.cancel()
+    }
+
+    /// Blue-green replacement body. The old generation serves throughout;
+    /// failure at any point leaves it serving and the entry `.degraded`.
+    private static func blueGreenReplace(
+        entry: ServiceEntry,
+        descriptor: EntryDescriptor,
+        context: BackplaneContext,
+        grace: Duration,
+        shutdownTimeout: Duration,
+        logger: Logger?
+    ) async {
+        // Phase 1: build new instance.
+        let newInstance: any ManagedService
+        do {
+            newInstance = try await descriptor.factory(context)
+        } catch {
+            entry.transition(to: .degraded(fault: ServiceFault(from: error)))
+            logger?.error("Replacement factory failed for '\(descriptor.id)': \(error)")
+            return
+        }
+
+        guard !Task.isCancelled else {
+            entry.transition(to: .degraded(fault: ServiceFault(
+                description: "Replacement cancelled before start",
+                errorType: "CancellationError",
+                firstObservedAt: .init()
+            )))
+            return
+        }
+
+        // Phase 2: start the new generation.
+        let newGen = Generation(id: entry.nextGenerationID(), instance: newInstance)
+        do {
+            try await newInstance.start()
+        } catch {
+            // Old generation continues serving.
+            entry.transition(to: .degraded(fault: ServiceFault(from: error)))
+            logger?.error("Replacement start() failed for '\(descriptor.id)': \(error)")
+            return
+        }
+
+        guard !Task.isCancelled else {
+            entry.transition(to: .degraded(fault: ServiceFault(
+                description: "Replacement cancelled after start",
+                errorType: "CancellationError",
+                firstObservedAt: .init()
+            )))
+            return
+        }
+
+        // Phase 3: atomic swap — new resolves get the new generation.
+        let oldGen = entry.swapActiveGeneration(to: newGen)
+        entry.transition(to: .running)
+        logger?.debug("Blue-green swap completed for '\(descriptor.id)' (gen \(newGen.id))")
+
+        // Phase 4: drain old generation (fire-and-forget from here).
+        guard let oldGen else { return }
+        Task.detached {
+            await ServiceGraph.drain(oldGen, entry: entry, grace: grace, shutdownTimeout: shutdownTimeout, logger: logger)
+        }
+    }
+
+    /// Cold-restart replacement body: old-before-new. From the moment the
+    /// active generation is taken, nothing is serving — every failure
+    /// path therefore lands ``ServiceState/failed(fault:)`` (recoverable
+    /// via ``recover(at:)``), never `.degraded`.
+    ///
+    /// Cancellation guards return quietly without a transition: the entry
+    /// is `.replacing` for the whole body, a state from which neither
+    /// `restart(at:)` nor `recover(at:)` will start a competing task, so
+    /// the guards are defensive only.
+    private static func coldReplace(
+        entry: ServiceEntry,
+        descriptor: EntryDescriptor,
+        context: BackplaneContext,
+        shutdownTimeout: Duration,
+        logger: Logger?
+    ) async {
+        // Phase 1: take the active generation out of service and shut it
+        // down before anything new is built — coldRestart exists because
+        // two instances must never coexist.
+        if let oldGen = entry.takeActiveGeneration() {
+            await drain(
+                oldGen, entry: entry, grace: .zero,
+                shutdownTimeout: shutdownTimeout, logger: logger
+            )
+        }
+
+        guard !Task.isCancelled else { return }
+
+        // Phase 2: build the new instance.
+        let newInstance: any ManagedService
+        do {
+            newInstance = try await descriptor.factory(context)
+        } catch {
+            entry.transition(to: .failed(fault: ServiceFault(from: error)))
+            logger?.error("Cold-restart factory failed for '\(descriptor.id)': \(error)")
+            return
+        }
+
+        guard !Task.isCancelled else { return }
+
+        // Phase 3: swap in, then start — swap-before-notify ordering as
+        // in boot, so every observer of `.starting` sees a live handle.
+        let newGen = Generation(id: entry.nextGenerationID(), instance: newInstance)
+        _ = entry.swapActiveGeneration(to: newGen)
+        entry.transition(to: .starting)
+
+        do {
+            try await newInstance.start()
+        } catch {
+            entry.transition(to: .failed(fault: ServiceFault(from: error)))
+            logger?.error("Cold-restart start() failed for '\(descriptor.id)': \(error)")
+            return
+        }
+
+        guard !Task.isCancelled else { return }
+
+        entry.transition(to: .running)
+        logger?.debug("Cold restart completed for '\(descriptor.id)' (gen \(newGen.id))")
     }
 
     // MARK: - Recover (from .failed)

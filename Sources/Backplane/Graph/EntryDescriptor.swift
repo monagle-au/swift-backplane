@@ -27,9 +27,11 @@ public struct EntryDescriptor: Sendable {
     /// never re-creates descriptors or swaps closures.
     package let factory: @Sendable (BackplaneContext) async throws -> any ManagedService
 
-    /// How the graph interprets `.unconfigured` for dependent callers.
-    /// Defaults to ``ConfigurationRequirement/required``.
-    package let configuration: ConfigurationRequirement
+    /// How the graph replaces this entry when ``ServiceGraph/restart(at:)``
+    /// is called. Read from the descriptor *before* the replacement
+    /// instance is constructed. Defaults to
+    /// ``ReplacementStrategy/standard``.
+    package let replacement: ReplacementStrategy
 
     /// Subgroup the entry belongs to. Drives failure-policy partitioning
     /// at boot and restartability checks. Defaults to
@@ -80,14 +82,14 @@ public struct EntryDescriptor: Sendable {
     /// `as:` labels.
     public init<T: ManagedService>(
         _ key: ServiceKey<T>,
-        configuration: ConfigurationRequirement = .required,
         subgroup: SubgroupTag = .core,
         dependencies: [AnyServiceKey] = [],
+        replacement: ReplacementStrategy = .standard,
         factory: @escaping @Sendable (BackplaneContext) async throws -> T
     ) {
         self.id = key.id
         self.factory = factory
-        self.configuration = configuration
+        self.replacement = replacement
         self.subgroup = subgroup
         self.dependencies = dependencies
         self.project = { $0 }
@@ -110,16 +112,16 @@ public struct EntryDescriptor: Sendable {
     /// erased to ``AnyServiceKey`` for the graph's internal index.
     public init<T: ManagedService>(
         _ keyPath: KeyPath<Services, ServiceKey<T>>,
-        configuration: ConfigurationRequirement = .required,
         subgroup: SubgroupTag = .core,
         dependencies: [PartialKeyPath<Services>] = [],
+        replacement: ReplacementStrategy = .standard,
         factory: @escaping @Sendable (BackplaneContext) async throws -> T
     ) {
         self.init(
             Services()[keyPath: keyPath],
-            configuration: configuration,
             subgroup: subgroup,
             dependencies: dependencies.map { AnyServiceKey(keyPath: $0) },
+            replacement: replacement,
             factory: factory
         )
     }
@@ -145,14 +147,14 @@ public struct EntryDescriptor: Sendable {
     /// binds to Form 1's `factory:` instead.
     public init<Value: Sendable>(
         _ key: ServiceKey<Value>,
-        configuration: ConfigurationRequirement = .required,
         subgroup: SubgroupTag = .core,
         dependencies: [AnyServiceKey] = [],
+        replacement: ReplacementStrategy = .standard,
         passive: @escaping @Sendable (BackplaneContext) async throws -> Value
     ) {
         self.id = key.id
         self.factory = { context in PassiveService(try await passive(context)) }
-        self.configuration = configuration
+        self.replacement = replacement
         self.subgroup = subgroup
         self.dependencies = dependencies
         // Safe by construction: this initialiser is the only producer of
@@ -160,19 +162,19 @@ public struct EntryDescriptor: Sendable {
         self.project = { ($0 as! PassiveService<Value>).inner }
     }
 
-    /// Keypath-flavoured ``init(_:configuration:subgroup:dependencies:passive:)``.
+    /// Keypath-flavoured ``init(_:subgroup:dependencies:replacement:passive:)``.
     public init<Value: Sendable>(
         _ keyPath: KeyPath<Services, ServiceKey<Value>>,
-        configuration: ConfigurationRequirement = .required,
         subgroup: SubgroupTag = .core,
         dependencies: [PartialKeyPath<Services>] = [],
+        replacement: ReplacementStrategy = .standard,
         passive: @escaping @Sendable (BackplaneContext) async throws -> Value
     ) {
         self.init(
             Services()[keyPath: keyPath],
-            configuration: configuration,
             subgroup: subgroup,
             dependencies: dependencies.map { AnyServiceKey(keyPath: $0) },
+            replacement: replacement,
             passive: passive
         )
     }
@@ -188,23 +190,22 @@ public struct EntryDescriptor: Sendable {
     /// ```swift
     /// EntryDescriptor(auditStoreKey,               // ServiceKey<any AuditStore>
     ///     factory: { _ in ClickHouseAuditService(...) },   // a ManagedService
-    ///     as: { $0 }                                       // -> any AuditStore
-    /// )
+    ///     as: { $0 })                                      // -> any AuditStore
     /// ```
     ///
     /// Requires both `factory:` and `as:`; the `as:` label distinguishes
     /// this from Form 1 even when `Value == Service`.
     public init<Value: Sendable, Service: ManagedService>(
         _ key: ServiceKey<Value>,
-        configuration: ConfigurationRequirement = .required,
         subgroup: SubgroupTag = .core,
         dependencies: [AnyServiceKey] = [],
+        replacement: ReplacementStrategy = .standard,
         factory: @escaping @Sendable (BackplaneContext) async throws -> Service,
         as project: @escaping @Sendable (Service) -> Value
     ) {
         self.id = key.id
         self.factory = { context in try await factory(context) }
-        self.configuration = configuration
+        self.replacement = replacement
         self.subgroup = subgroup
         self.dependencies = dependencies
         // Safe by construction: `factory`'s declared return type is
@@ -212,20 +213,20 @@ public struct EntryDescriptor: Sendable {
         self.project = { project($0 as! Service) }
     }
 
-    /// Keypath-flavoured ``init(_:configuration:subgroup:dependencies:factory:as:)``.
+    /// Keypath-flavoured ``init(_:subgroup:dependencies:replacement:factory:as:)``.
     public init<Value: Sendable, Service: ManagedService>(
         _ keyPath: KeyPath<Services, ServiceKey<Value>>,
-        configuration: ConfigurationRequirement = .required,
         subgroup: SubgroupTag = .core,
         dependencies: [PartialKeyPath<Services>] = [],
+        replacement: ReplacementStrategy = .standard,
         factory: @escaping @Sendable (BackplaneContext) async throws -> Service,
         as project: @escaping @Sendable (Service) -> Value
     ) {
         self.init(
             Services()[keyPath: keyPath],
-            configuration: configuration,
             subgroup: subgroup,
             dependencies: dependencies.map { AnyServiceKey(keyPath: $0) },
+            replacement: replacement,
             factory: factory,
             as: project
         )

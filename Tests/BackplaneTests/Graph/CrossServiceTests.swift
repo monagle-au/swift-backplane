@@ -18,10 +18,6 @@ import Testing
 final class IdentityService: ManagedService, @unchecked Sendable {
     let instanceID = UUID()
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     func start() async throws { }
     func shutdown() async { }
 }
@@ -31,10 +27,6 @@ final class IdentityService: ManagedService, @unchecked Sendable {
 final class SlowStartService: ManagedService, @unchecked Sendable {
     let instanceID = UUID()
     let startDelay: Duration
-
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
 
     init(startDelay: Duration) { self.startDelay = startDelay }
 
@@ -54,10 +46,6 @@ final class ResolvingService<Resolved: ManagedService>: ManagedService, @uncheck
     let factoryStartedAt: Date
     let resolvedReturnedAt: Date
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     init(resolved: Resolved, factoryStartedAt: Date, resolvedReturnedAt: Date) {
         self.resolved = resolved
         self.factoryStartedAt = factoryStartedAt
@@ -73,10 +61,6 @@ final class ResolvingService<Resolved: ManagedService>: ManagedService, @uncheck
 /// from a real context (rather than constructing one inline).
 final class TapService: ManagedService, @unchecked Sendable {
     let context: BackplaneContext
-
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
 
     init(context: BackplaneContext) { self.context = context }
 
@@ -113,10 +97,6 @@ actor StartGate {
 final class MaybeBlockingService: ManagedService, @unchecked Sendable {
     let instanceID = UUID()
     let gate: StartGate?
-
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
 
     init(gate: StartGate? = nil) { self.gate = gate }
 
@@ -414,7 +394,7 @@ struct CrossServiceTests {
         }
 
         let graph = try ServiceGraph(descriptors: [
-            EntryDescriptor(keyA, subgroup: .integrations, factory: aFactory),
+            EntryDescriptor(keyA, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50)), factory: aFactory),
             EntryDescriptor(keyTap) { ctx in TapService(context: ctx) },
         ])
 

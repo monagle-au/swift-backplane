@@ -15,9 +15,6 @@ public enum ServiceState: Sendable, Hashable {
     /// Entry declared but no usable configuration available.
     case unconfigured
 
-    /// An external flow is gathering configuration (e.g. OAuth, pairing).
-    case configuring
-
     /// First instance is constructing; ``ManagedService/start()`` is
     /// running. The active-generation pointer is already populated, so
     /// resolves landing during ``starting`` see the new instance (this
