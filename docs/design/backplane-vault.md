@@ -100,7 +100,7 @@ read-time access via the normal `ConfigReader`).
 None unless they opt in. The introduction of BackplaneVault leaves the
 existing `ConfigReader` story unchanged for consumers that don't
 import it. As part of the (future) Backplane integration, the
-Backplane `ServiceContext` would gain an optional
+Backplane `BackplaneContext` would gain an optional
 `configStore: ConfigStore?` property (see §7 below — not yet
 implemented; the vault target currently has no dependency on, or
 integration with, the `Backplane` library) that is `nil` for
@@ -760,19 +760,19 @@ the protocol design admits it.
 
 ## 7. Integration with Backplane
 
-### 7.1 `ServiceContext.configStore`
+### 7.1 `BackplaneContext.configStore`
 
 > **Status:** §7 as a whole is the *planned* Backplane integration —
-> none of it has shipped. As of 1.3.0 there is no
-> `ServiceContext.configStore`, no `ConfigStore.changes` stream, and
+> none of it has shipped. As of 2.0 there is no
+> `BackplaneContext.configStore`, no `ConfigStore.changes` stream, and
 > no `watch:` constructor; BackplaneVault stands alone on
 > swift-configuration (§7.4 is the part that is true today).
 
-Backplane's `ServiceContext` (see `backplane.md` §2.7) would gain
-an optional property:
+Backplane's `BackplaneContext` (see `backplane.md` §2.7; named
+`ServiceContext` before 2.0) would gain an optional property:
 
 ```swift
-public final class ServiceContext: Sendable {
+public final class BackplaneContext: Sendable {
     // ... existing properties ...
 
     /// Per-entry writable configuration store. Non-nil when the
@@ -818,7 +818,7 @@ struct MyApp: BackplaneApplication {
     }
 
     static func services() -> [EntryDescriptor] {
-        // Descriptors as usual; ServiceContext.configStore is
+        // Descriptors as usual; BackplaneContext.configStore is
         // populated automatically by the graph when a vault is
         // present in the bootstrap.
     }
@@ -834,9 +834,9 @@ up; it's `ConfigStore` (non-optional) for a consumer that has.
 
 ### 7.3 Hot-reload integration with `HotReloadable`
 
-`backplane.md` §7 defines `HotReloadable.reload()` (with a
-config-taking form to follow) — services that support in-place
-reconfiguration re-read fresh configuration and apply it atomically.
+`backplane.md` §7 defines `HotReloadable.reload(config:)` — the
+graph passes the entry-scoped `ConfigReader` and services that
+support in-place reconfiguration apply it atomically.
 BackplaneVault would close the loop:
 
 ```swift
@@ -1104,7 +1104,7 @@ accidentally leak ciphertext to logs.
 BackplaneVault is the satellite target that augments
 swift-configuration's read-only story with writable, persistable,
 encryption-aware config. It composes with Backplane's
-`ServiceContext` to give every service entry an optional, scoped
+`BackplaneContext` to give every service entry an optional, scoped
 `ConfigStore`, and ties into §7's `HotReloadable` machinery via an
 optional file-changes stream.
 

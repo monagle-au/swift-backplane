@@ -10,7 +10,7 @@ import ServiceContextModule
 ///
 /// Backplane does not produce these IDs — that's the tracer's job. Apps
 /// running an OpenTelemetry tracer (or any other span emitter) populate
-/// this key on the active ``ServiceContext`` at span entry. When set,
+/// this key on the active `ServiceContext` (the swift-service-context task-local) at span entry. When set,
 /// ``StructuredLogHandler`` calls
 /// ``StructuredLogProfile/traceCorrelation`` to convert the IDs into
 /// vendor-specific log metadata. The
@@ -48,7 +48,7 @@ public struct LoggingTraceContext: Sendable, Equatable {
 }
 
 /// `ServiceContextKey` for carrying ``LoggingTraceContext`` through the
-/// task-local ``ServiceContext``.
+/// task-local `ServiceContext`.
 public enum LoggingTraceContextKey: ServiceContextKey {
     public typealias Value = LoggingTraceContext
 }

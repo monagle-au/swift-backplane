@@ -58,8 +58,10 @@ integrations they don't use.
 - ``EntryDescriptor``
 - ``ServiceKey``
 - ``Services``
+- ``ServiceList``
 - ``AnyServiceKey``
 - ``ServiceKeyConvertible``
+- ``DefaultEntryProviding``
 - ``BackplaneContext``
 - ``ServiceState``
 - ``ServiceFault``
@@ -68,6 +70,7 @@ integrations they don't use.
 ### Managed services
 
 - ``ManagedService``
+- ``BackplaneService``
 - ``LifecycleAdapter``
 - ``PassiveService``
 - ``HotReloadable``
@@ -81,7 +84,6 @@ integrations they don't use.
 - ``SubgroupPolicy``
 - ``ServiceHealthReporter``
 - ``ServiceLifecycleHandle``
-- ``ConfigurationRequirement``
 
 ### Bootstrap pipeline
 

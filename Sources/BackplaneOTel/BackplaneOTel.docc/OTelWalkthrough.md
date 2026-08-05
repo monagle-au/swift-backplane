@@ -45,7 +45,7 @@ struct Serve: PersistentCommand {
     @OptionGroup var tracing: OTelTracingOptions
     @OptionGroup var metrics: OTelMetricsOptions
 
-    var requiredServices: [PartialKeyPath<Services>] { [] }
+    var requiredServices: ServiceList { [] }
 
     func bootstrap(config: ConfigReader, environment: Environment) async throws -> BootstrapPlan {
         try BackplaneOTel.makeBootstrap(

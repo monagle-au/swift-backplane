@@ -62,7 +62,7 @@ struct Serve: PersistentCommand {
 
     @OptionGroup var logging: LoggingOptions
 
-    var requiredServices: [PartialKeyPath<Services>] { [] }
+    var requiredServices: ServiceList { [] }
 
     func bootstrap(config: ConfigReader, environment: Environment) async throws -> BootstrapPlan {
         var plan = BootstrapPlan()

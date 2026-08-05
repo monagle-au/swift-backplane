@@ -18,7 +18,7 @@ In your `Package.swift`:
 ```swift
 .package(
     url: "https://github.com/<org>/swift-backplane.git",
-    from: "1.0.0",
+    from: "2.0.0",
     traits: ["Postgres"]
 ),
 
@@ -33,7 +33,9 @@ In your `Package.swift`:
 
 ## Register the service
 
-Add the supplied descriptor to your application's `services()`:
+``BackplanePostgresService`` conforms to `BackplaneService`, so
+declaring the dependency **is** the registration — no `services()`
+entry needed:
 
 ```swift
 import Backplane
@@ -43,31 +45,56 @@ import BackplanePostgres
 struct MyApp: BackplaneApplication {
     typealias RootCommand = AppCommand
     static let identifier = "my-app"
+    // No services() override required for \.postgres.
+}
 
-    static func services() -> [EntryDescriptor] {
-        [postgresEntryDescriptor()]
+struct Serve: PersistentCommand {
+    typealias App = MyApp
+    var requiredServices: ServiceList { [\.postgres] }
+}
+```
+
+The graph materialises an `EntryDescriptor` with id `"postgres"`
+(subgroup `.core` by default). Its `make(context:)` reads the
+entry's config scope — `postgres.*` for the stock key (default
+source: process environment variables) — constructs a
+`PostgresClient`, and wraps it in a ``BackplanePostgresService``,
+which spawns and cancels the client's run loop for the graph. The
+key is exposed as `Services.postgres`, so commands and factories
+address it as `\.postgres`.
+
+To override the entry's policies, add an explicit descriptor to
+`services()` — explicit descriptors always win over materialised
+defaults:
+
+```swift
+static func services() -> [EntryDescriptor] {
+    [EntryDescriptor(\.postgres, subgroup: .integrations)]
+}
+```
+
+For a second database, declare another key with a different id and
+the same type — its entry reads its own config scope
+(`analytics.*` below), because a factory's config is scoped to the
+entry id:
+
+```swift
+extension Services {
+    public var analyticsDB: ServiceKey<BackplanePostgresService> {
+        ServiceKey(id: "analytics")     // reads analytics.host, …
     }
 }
 ```
 
-``postgresEntryDescriptor(subgroup:dependencies:)`` returns an
-`EntryDescriptor` with id `"postgres"` (subgroup `.core` by
-default). Its factory reads the `postgres.*` scope of your
-`ConfigReader` (default: process environment variables),
-constructs a `PostgresClient`, and wraps it in a
-``BackplanePostgresService`` — the `ManagedService` that spawns
-and cancels the client's run loop for the graph. The key is
-exposed as `Services.postgres`, so commands and factories address
-it as `\.postgres`.
-
-> Note: `Services.postgresKey` still compiles as a deprecated
-> alias for `Services.postgres` (renamed in 1.1.0); it will be
-> removed in 2.0.0.
+> Note: `postgresEntryDescriptor()` and the deprecated
+> `Services.postgresKey` alias were removed in 2.0.0.
 
 ## Configuration keys
 
 Read by ``PostgresNIO/PostgresClient/Configuration/init(config:)``
-under the `postgres` scope. With the default
+under the entry's config scope — `postgres` for the stock key
+(a second key with id `"analytics"` reads the same keys under
+`analytics.*`). With the default
 `EnvironmentVariablesProvider`, each key maps to its
 upper-snake-case env var (`postgres.host` → `POSTGRES_HOST`,
 `postgres.unixSocketPath` → `POSTGRES_UNIX_SOCKET_PATH`, …).
@@ -110,7 +137,7 @@ resolve the service by keypath and drive queries through its
 struct ListUsers: TaskCommand {
     typealias App = MyApp
     static let configuration = CommandConfiguration(commandName: "list-users")
-    var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
+    var requiredServices: ServiceList { [\.postgres] }
 
     func execute(with context: BackplaneContext) async throws {
         let pg = try await context.requireService(\.postgres)
@@ -161,7 +188,7 @@ Run them via ``PostgresMigrator``:
 struct Migrate: TaskCommand {
     typealias App = MyApp
     static let configuration = CommandConfiguration(commandName: "migrate")
-    var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
+    var requiredServices: ServiceList { [\.postgres] }
 
     func execute(with context: BackplaneContext) async throws {
         let pg = try await context.requireService(\.postgres)

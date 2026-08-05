@@ -8,6 +8,119 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-08-05
+
+Environment-model registration. Services describe themselves — a type
+conforming to the new `BackplaneService` protocol carries its own
+construction, dependencies, subgroup, and replacement strategy, and a
+`ServiceKey` whose `Value` conforms needs **no** `services()` entry:
+naming the key in a command's `requiredServices` materialises the
+entry and its transitive static dependencies. `services()` (now
+defaulted to `[]`) becomes the override surface — protocol-key
+bindings, third-party closures, test doubles, and per-app overrides,
+with explicit descriptors always beating defaults.
+
+The audit behind this release found ~88% of registration factory
+closures ignored their context entirely; the closure is now optional
+exactly where it was ceremony, and remains the escape hatch where it
+carries real work.
+
+### ⚠️ Migration notes
+
+- **Silent config double-scoping trap.** `BackplaneContext.config` is
+  now scoped to the entry id. A factory that hand-scoped —
+  `requireConfig().scoped(to: "postgres")` on the entry `"postgres"` —
+  now reads `postgres.postgres.*` and finds nothing, **without an
+  error**. Delete the hand-scoping; for keys outside the entry's scope
+  use the new `context.rootConfig`.
+- `ServiceContext` → **`BackplaneContext`** (mechanical rename in
+  `execute(with:)` and factory signatures). The type was renamed to
+  end the collision with `ServiceContextModule.ServiceContext`
+  (swift-service-context's tracing-baggage type), which keeps its name.
+- `requiredServices` is now `ServiceList` (was
+  `[PartialKeyPath<Services>]`). Array-literal bodies are unchanged —
+  only the declared type changes.
+- `replacementStrategy` moved off the service instance: declare it per
+  entry (`EntryDescriptor(…, replacement: …)`) or per type
+  (`BackplaneService.replacementStrategy`). Delete the instance
+  property from `ManagedService` conformances.
+- `HotReloadable.reload()` → `reload(config:)` — the graph passes the
+  entry-scoped reader (an empty reader when the graph has no config).
+- `postgresEntryDescriptor()` is gone: requiring `\.postgres` is the
+  whole registration; override defaults with
+  `EntryDescriptor(\.postgres, subgroup: …)`.
+
+### Added
+
+- **`BackplaneService`** — self-describing service protocol refining
+  `ManagedService`: `static make(context:)`,
+  `static dependencies: ServiceList`, `static subgroup`,
+  `static replacementStrategy`, each with sensible defaults. The same
+  type may back multiple keys; each entry reads its own config scope
+  (two Postgres keys = two databases, one type).
+- **`ServiceGraph.materializedDescriptors(explicit:roots:)`** — the
+  materialisation walk: explicit descriptors + defaults for
+  conforming keys reachable from `roots` (transitively, through
+  explicit entries' keypath-declared dependencies too). Unknown,
+  non-conforming keys throw the new
+  `ServiceGraphError.unresolvableService(id:valueType:)`.
+- **`ServiceList`** — the keypath-list currency for
+  `requiredServices`, `BackplaneService.dependencies`, and
+  `EntryDescriptor`'s keypath-flavoured `dependencies:`. Array-literal
+  (`[\.postgres]`) and variadic (`ServiceList(\.postgres, \.http)`)
+  forms; keeps the `PartialKeyPath<Services> & Sendable` composition
+  out of every signature.
+- **Closure-free `EntryDescriptor` initialisers** for conforming
+  `Value` types — `EntryDescriptor(\.database, subgroup: …,
+  dependencies: …, replacement: …)`; nil parameters fall back to the
+  type's statics (a supplied `dependencies:` replaces, not merges).
+- **`BackplaneContext.rootConfig`** — the unscoped reader, for
+  cross-cutting keys outside the entry's scope.
+- **`ReplacementStrategy.standard`** — the package-wide default
+  (`.blueGreen(grace: .seconds(30))`), written once.
+- **`.coldRestart` is implemented** (it previously fell back to
+  blue-green with a logged notice): the old generation is taken out of
+  service and shut down (zero grace, bounded by the graph's
+  `shutdownTimeout`) *before* the new instance is built — for
+  listeners and other exclusive-resource services that can never
+  blue-green (the port is held until the old generation dies).
+  `resolve()` returns nil in the intentional gap; `requireService`
+  waiters park through it. Failures land `.failed` — nothing is
+  serving, so `.degraded`'s contract would be a lie — and
+  `recover(at:)` remains the exit.
+
+### Changed
+
+- **`BackplaneContext.config` is scoped to the entry id** (see
+  migration notes). Command-level contexts stay root-scoped.
+  `BackplanePostgres` reads its connection parameters from the entry
+  scope — the stock `\.postgres` key still reads `postgres.*`.
+- **Replacement strategy is declarative.** `restart(at:)` reads the
+  descriptor's `replacement:` *before* constructing the replacement —
+  previously the strategy was read off the new instance after it was
+  already built.
+- **`HotReloadable.reload(config:)`** — and the non-conforming
+  fallback now escalates through the descriptor's declared strategy,
+  including `.coldRestart`.
+- `BackplanePostgresService` conforms to `BackplaneService`;
+  `Services.postgres` is unchanged.
+- `BackplaneApplication.services()` has a default implementation
+  returning `[]`.
+
+### Removed
+
+- `ConfigurationRequirement` and `EntryDescriptor`'s `configuration:`
+  parameter — stored since 1.0, never read by any code path.
+- `ServiceState.configuring` — never entered by any transition.
+- `ReplacementStrategy.hotReload` — redundant: `reload(at:)` has
+  always dispatched on `HotReloadable` conformance, not the enum.
+- `ManagedService.replacementStrategy` (instance property) — see
+  Changed.
+- `postgresEntryDescriptor(subgroup:dependencies:)` — superseded by
+  default materialisation and the closure-free override form.
+- `Services.postgresKey` — deprecated since 1.1.0, removed as
+  scheduled.
+
 ## [1.3.1] — 2026-07-23
 
 A documentation-only release: no code changes (every source diff is
@@ -182,8 +295,9 @@ follow strict SemVer.
   `SubgroupTag`, and dependency list. Factory receives a
   `ServiceContext`.
 - **`ServiceContext`** — per-entry context object passed into
-  factories. Exposes the entry's logger, the `ConfigReader` scoped
-  to the entry, environment, and `requireService(_:timeout:)` /
+  factories. Exposes the entry's logger, the application
+  `ConfigReader` (factories scope it by hand; automatic entry-scoping
+  arrived in 2.0.0), environment, and `requireService(_:timeout:)` /
   `service(_:)` for cross-entry resolution.
 - **`ServiceKey<Value>`** — typed key value identifying an entry.
   `AnyServiceKey` is the type-erased form used in dependency lists.

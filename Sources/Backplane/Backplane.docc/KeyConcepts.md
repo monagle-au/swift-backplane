@@ -22,7 +22,7 @@ BackplaneCommand.run() (default)
     ↓ bootstrap(config:environment:) → BootstrapPlan
     ↓ BootstrapCoordinator.shared.apply(plan)
     ↓ build root Logger
-    ↓ App.services() → ServiceGraph
+    ↓ App.services() + materialised defaults → ServiceGraph
     ↓ boot the transitive closure of requiredServices
     ↓ ServiceGroup.run()
 ```
@@ -32,9 +32,12 @@ BackplaneCommand.run() (default)
 ``BackplaneApplication`` is the type marked `@main`. It declares
 the application's identity (used as the default logger label and
 tracing service name), the `RootCommand` ArgumentParser entry
-point, the service descriptors returned from `services()`, and
-optionally a custom `ConfigReader` factory
-(``BackplaneApplication/configReader(for:)``).
+point, and optionally a custom `ConfigReader` factory
+(``BackplaneApplication/configReader(for:)``). `services()`
+defaults to an empty list — keys whose value type conforms to
+``BackplaneService`` register themselves — and is the override
+surface for explicit descriptors: protocol-key bindings, closures
+for third-party types, test doubles, and per-app policy overrides.
 
 A single conformance is the bottleneck where everything else hangs
 together; in practice you only write one of these per binary.
@@ -44,9 +47,11 @@ together; in practice you only write one of these per binary.
 ``BackplaneCommand`` builds on `AsyncParsableCommand` to add three
 hooks the framework needs:
 
-- **`requiredServices: [PartialKeyPath<Services>]`** — the keys
-  whose transitive dependencies must be running before this
-  command runs, written as keypaths: `[\.postgres, \.auditStore]`.
+- **`requiredServices: ServiceList`** — the keys whose transitive
+  dependencies must be running before this command runs, written
+  as keypaths: `[\.postgres, \.auditStore]`. Keys whose value type
+  conforms to ``BackplaneService`` need no `services()` entry —
+  naming them here is the registration.
 - **`bootstrap(config:environment:) async throws -> BootstrapPlan`**
   — the one-shot configuration of the global logging / metrics /
   tracing systems. Called after CLI parsing, before any `Logger`
@@ -82,9 +87,14 @@ keypath everywhere else:
 - ``Services`` is the declaration namespace. Consumers extend it
   with computed properties returning typed keys, which makes every
   key addressable as `\.name` with autocomplete.
+- ``ServiceList`` is the currency for lists of those keypaths —
+  `requiredServices`, ``BackplaneService/dependencies``, and
+  `EntryDescriptor`'s `dependencies:` parameters all take one,
+  built from an array literal (`[\.postgres, \.http]`) or
+  variadically.
 - ``EntryDescriptor`` pairs a key with the factory that builds the
   service, plus its ``SubgroupTag``, dependency list, and
-  ``ConfigurationRequirement``.
+  ``ReplacementStrategy``.
 
 ```swift
 extension Services {
@@ -98,19 +108,38 @@ an opt-in shorthand for the same declaration:
 The trait is off by default and pulls `swift-syntax` only for
 consumers who enable it.
 
-### Three registration forms
+### Conformance-first registration
 
-A key's resolved `Value` need not equal the concrete type the
-graph lifecycles. ``EntryDescriptor`` has three initialiser forms
-that bridge the two:
+Types that conform to ``BackplaneService`` — a refinement of
+``ManagedService`` with a static `make(context:)` plus
+`dependencies`, `subgroup`, and `replacementStrategy` statics —
+need no descriptor at all. The graph materialises a default
+``EntryDescriptor`` for every conforming key a command's
+`requiredServices` reaches (transitively, through the types'
+static dependencies). To override a default's policies, add a
+closure-free descriptor to `services()`:
+
+```swift
+EntryDescriptor(\.notifier, subgroup: .integrations)
+```
+
+Parameters left out fall back to the type's static declarations;
+an explicit descriptor always wins over the materialised default.
+
+### Three closure forms
+
+For everything else — third-party types, protocol keys, test
+doubles — a key's resolved `Value` need not equal the concrete
+type the graph lifecycles. ``EntryDescriptor`` has three
+closure-taking initialiser forms that bridge the two:
 
 **Identity** — the factory returns a ``ManagedService`` and the key
 resolves to that same type. The only form usable as a bare
 trailing closure:
 
 ```swift
-EntryDescriptor(\.postgres) { context in
-    try await PostgresService(logger: context.logger)
+EntryDescriptor(\.worker) { context in
+    try await WorkerService(logger: context.logger)
 }
 ```
 
@@ -164,10 +193,19 @@ as ``ServiceGraphError``.
 
 Each factory (and a task command's `execute`) receives a
 ``BackplaneContext`` scoped to its entry: `entryID`, a pre-scoped
-`logger`, the application `config` reader (`requireConfig()` for
-the non-optional form), the entry's ``ServiceLifecycleHandle``,
-a ``ServiceHealthReporter`` for self-reported degradation, and
-the resolution methods above.
+`logger`, a `config` reader (`requireConfig()` for the
+non-optional form), the entry's ``ServiceLifecycleHandle``, a
+``ServiceHealthReporter`` for self-reported degradation, and the
+resolution methods above.
+
+A factory's `config` is **scoped to the entry's id** — an entry
+with id `"postgres"` reads `postgres.host` as just `"host"`. This
+is what makes multi-instance registration work: the same service
+type registered under two keys reads two config scopes. The
+unscoped application reader is available as
+``BackplaneContext/rootConfig`` for cross-cutting keys
+(`logging.level`, feature flags); a task command's context stays
+root-scoped.
 
 > Note: Backplane's ``BackplaneContext`` class is distinct from
 > `ServiceContextModule.ServiceContext`, swift-service-context's
@@ -180,16 +218,20 @@ the resolution methods above.
 ``ServiceGraph`` is the actor that owns the entries. It boots only
 the transitive closure of the boot roots (a command's
 `requiredServices`), tracks each entry through ``ServiceState``
-(`unconfigured` → `configuring` → `starting` → `running`, with
-`degraded`, `replacing`, `stopped`, and `failed` branches), and
-exposes the mutation surface:
+(`unconfigured` → `starting` → `running`, with `degraded`,
+`replacing`, `stopped`, and `failed` branches), and exposes the
+mutation surface:
 
-- `restart(at:)` — blue-green replacement: a new generation starts
-  and is swapped in before the old one drains, per the service's
-  ``ReplacementStrategy``.
+- `restart(at:)` — replacement per the entry's declared
+  ``ReplacementStrategy``. The default (`.standard`) is blue-green:
+  a new generation starts and is swapped in before the old one
+  drains. Entries declaring `.coldRestart` (exclusive ports, file
+  locks) are shut down first; `requireService` callers wait
+  through the gap.
 - `reload(at:)` — in-place reconfiguration for entries whose
   service conforms to ``HotReloadable``, avoiding a generation
-  swap entirely.
+  swap entirely. The graph passes the entry-scoped `ConfigReader`
+  to ``HotReloadable/reload(config:)``.
 - `recover(at:)` — cold re-boot of a `.failed` entry (factory +
   start from scratch). Failure during recovery lands back in
   `.failed`, never `.degraded`.

@@ -16,7 +16,8 @@ extension PostgresClient.Configuration {
     ///
     /// Connection parameters (matching the existing keys):
     /// - `username` (default `"postgres"`), `password` (secret), `database`
-    /// - Either `unixSocketPath`, OR `host` (default `"localhost"`) + `port` (default `5432`) + `tls.*`
+    /// - Either `unixSocketPath`, OR `host` (default `"localhost"`) + `port` (default `5432`) +
+    ///   TLS knobs at the same scope (`base`, `minimumTLSVersion`, `maximumTLSVersion`, `cipherSuites`)
     ///
     /// Pool + timeout knobs (all optional; absent keys preserve postgres-nio defaults):
     /// - `pool.minimumConnections` (Int; default 0 — postgres-nio default)

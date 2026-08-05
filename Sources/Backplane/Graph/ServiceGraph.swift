@@ -1087,7 +1087,8 @@ public actor ServiceGraph {
     /// Apply new configuration to an entry's live service in place.
     ///
     /// - If the service conforms to ``HotReloadable``, the graph calls
-    ///   ``HotReloadable/reload()`` on the current instance. On success
+    ///   ``HotReloadable/reload(config:)`` on the current instance,
+    ///   passing the entry-scoped reader. On success
     ///   the entry stays `.running` (no new generation). On error the
     ///   entry transitions to ``ServiceState/degraded(fault:)`` — the
     ///   old instance keeps serving; the operator can escalate via
