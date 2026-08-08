@@ -49,6 +49,14 @@ carries real work.
 - `postgresEntryDescriptor()` is gone: requiring `\.postgres` is the
   whole registration; override defaults with
   `EntryDescriptor(\.postgres, subgroup: …)`.
+- **Postgres TLS config keys moved under `tls.`** and were renamed:
+  `postgres.base` → `postgres.tls.mode`, `postgres.minimumTLSVersion`
+  → `postgres.tls.minimumVersion`, `postgres.maximumTLSVersion` →
+  `postgres.tls.maximumVersion`, `postgres.cipherSuites` →
+  `postgres.tls.cipherSuites` (env vars `POSTGRES_TLS_MODE`,
+  `POSTGRES_TLS_MINIMUM_VERSION`, …). The old flat keys are silently
+  ignored — a deployment that set `POSTGRES_BASE=require` comes up
+  with TLS **disabled** until the vars are renamed.
 
 ### Added
 
@@ -104,6 +112,11 @@ carries real work.
   including `.coldRestart`.
 - `BackplanePostgresService` conforms to `BackplaneService`;
   `Services.postgres` is unchanged.
+- **Postgres TLS keys nest under `tls.`** (`postgres.tls.mode`,
+  `postgres.tls.minimumVersion`, `postgres.tls.maximumVersion`,
+  `postgres.tls.cipherSuites`), matching the `pool.*` pattern. `mode`
+  replaces the old `base` key — a name that had leaked from
+  postgres-nio's internal `TLS.base` property. See migration notes.
 - `BackplaneApplication.services()` has a default implementation
   returning `[]`.
 

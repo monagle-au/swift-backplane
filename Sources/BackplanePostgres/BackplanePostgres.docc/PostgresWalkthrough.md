@@ -107,18 +107,24 @@ upper-snake-case env var (`postgres.host` → `POSTGRES_HOST`,
 | `postgres.host`                           | String | `"localhost"`| Ignored when `unixSocketPath` is set.            |
 | `postgres.port`                           | Int    | `5432`      | Ignored when `unixSocketPath` is set.            |
 | `postgres.unixSocketPath`                 | String | unset       | When set, takes precedence over host/port.       |
-| `postgres.base`                           | enum   | `disable`   | TLS mode: `disable` / `prefer` / `require`.      |
-| `postgres.minimumTLSVersion`              | enum   | unset       | `tlsv1` / `tlsv11` / `tlsv12` / `tlsv13`.        |
-| `postgres.maximumTLSVersion`              | enum   | unset       | Same range.                                      |
-| `postgres.cipherSuites`                   | String | unset       | Pass-through to NIOSSL.                          |
+| `postgres.tls.mode`                       | enum   | `disable`   | TLS mode: `disable` / `prefer` / `require`.      |
+| `postgres.tls.minimumVersion`             | enum   | unset       | `tlsv1` / `tlsv11` / `tlsv12` / `tlsv13`.        |
+| `postgres.tls.maximumVersion`             | enum   | unset       | Same range.                                      |
+| `postgres.tls.cipherSuites`               | String | unset       | Pass-through to NIOSSL.                          |
 | `postgres.pool.minimumConnections`        | Int    | (NIO default) |                                                |
 | `postgres.pool.maximumConnections`        | Int    | (NIO default) |                                                |
 | `postgres.pool.connectionIdleTimeoutSeconds` | Int | (NIO default) |                                                |
 | `postgres.connectTimeoutSeconds`          | Int    | (NIO default) |                                                |
 | `postgres.statementTimeoutSeconds`        | Int    | unset       | When set, sent as `statement_timeout` startup parameter (milliseconds). `0` disables explicitly. |
 
-> Note: the TLS keys sit directly at the `postgres.*` scope — not
-> under a `postgres.tls.*` sub-scope.
+> Note: the TLS keys moved in 2.0.0 — they were previously flat at the
+> entry scope (`postgres.base`, `postgres.minimumTLSVersion`,
+> `postgres.maximumTLSVersion`, `postgres.cipherSuites`). The old keys
+> are no longer read. As env vars the new keys are `POSTGRES_TLS_MODE`,
+> `POSTGRES_TLS_MINIMUM_VERSION`, `POSTGRES_TLS_MAXIMUM_VERSION`, and
+> `POSTGRES_TLS_CIPHER_SUITES`. Trust roots and client certificates are
+> not yet configurable; connections verify against the platform default
+> trust store.
 
 For Cloud SQL via Cloud Run, the unix-socket path follows GCP's
 convention:

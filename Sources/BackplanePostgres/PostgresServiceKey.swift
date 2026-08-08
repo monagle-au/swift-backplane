@@ -35,10 +35,10 @@ import Synchronization
 /// - `postgres.database`
 /// - `postgres.unixSocketPath` (optional, mutually exclusive with host/port)
 ///
-/// TLS options are read at the same scope (`postgres.base`,
-/// `postgres.minimumTLSVersion`, `postgres.maximumTLSVersion`,
-/// `postgres.cipherSuites`). See `Postgres+Config.swift` for the full
-/// set.
+/// TLS options are read under the `tls.` sub-scope (`postgres.tls.mode`,
+/// `postgres.tls.minimumVersion`, `postgres.tls.maximumVersion`,
+/// `postgres.tls.cipherSuites`). See `Postgres+Config.swift` for the
+/// full set.
 ///
 /// **Multi-instance:** register a second key with a different id and
 /// the same type — its entry reads its own config scope:

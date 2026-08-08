@@ -17,7 +17,8 @@ extension PostgresClient.Configuration {
     /// Connection parameters (matching the existing keys):
     /// - `username` (default `"postgres"`), `password` (secret), `database`
     /// - Either `unixSocketPath`, OR `host` (default `"localhost"`) + `port` (default `5432`) +
-    ///   TLS knobs at the same scope (`base`, `minimumTLSVersion`, `maximumTLSVersion`, `cipherSuites`)
+    ///   TLS knobs under the `tls.` sub-scope (`tls.mode`, `tls.minimumVersion`,
+    ///   `tls.maximumVersion`, `tls.cipherSuites`)
     ///
     /// Pool + timeout knobs (all optional; absent keys preserve postgres-nio defaults):
     /// - `pool.minimumConnections` (Int; default 0 — postgres-nio default)
@@ -40,7 +41,7 @@ extension PostgresClient.Configuration {
         } else {
             let host = config.string(forKey: "host", default: "localhost")
             let port = config.int(forKey: "port", default: 5432)
-            let tls = PostgresClient.Configuration.TLS(config: config)
+            let tls = PostgresClient.Configuration.TLS(config: config.scoped(to: "tls"))
 
             self.init(
                 host: host, port: port, username: username, password: password, database: database,
@@ -81,8 +82,13 @@ extension PostgresClient.Configuration {
 }
 
 extension PostgresClient.Configuration.TLS {
+    /// Build from a reader scoped to the `tls.` sub-scope of an entry
+    /// (`postgres.tls.*` for the stock key). Keys:
+    /// - `mode` (`disable` / `prefer` / `require`; default `disable`)
+    /// - `minimumVersion`, `maximumVersion`, `cipherSuites` — see
+    ///   `NIOSSL.TLSConfiguration.configure(_:)`.
     public init(config: ConfigReader) {
-        switch config.string(forKey: "base", as: TLSOption.self, default: .disable) {
+        switch config.string(forKey: "mode", as: TLSMode.self, default: .disable) {
         case .disable:
             self = .disable
         case .prefer:
@@ -98,26 +104,32 @@ extension PostgresClient.Configuration.TLS {
 }
 
 extension NIOSSL.TLSConfiguration {
+    /// Apply TLS knobs from a reader scoped to the `tls.` sub-scope of
+    /// an entry (`postgres.tls.*` for the stock key). All keys are
+    /// optional; absent keys preserve the NIOSSL client defaults.
     public mutating func configure(_ config: ConfigReader) {
-        if let minimumTLSVersion: NIOSSL.TLSVersion = config.string(forKey: "minimumTLSVersion") {
-            self.minimumTLSVersion = minimumTLSVersion
+        if let minimumVersion: NIOSSL.TLSVersion = config.string(forKey: "minimumVersion") {
+            self.minimumTLSVersion = minimumVersion
         }
 
-        if let maximumTLSVersion = config.string(
-            forKey: "maximumTLSVersion", as: NIOSSL.TLSVersion.self)
+        if let maximumVersion = config.string(
+            forKey: "maximumVersion", as: NIOSSL.TLSVersion.self)
         {
-            self.maximumTLSVersion = maximumTLSVersion
+            self.maximumTLSVersion = maximumVersion
         }
 
         if let cipherSuites = config.string(forKey: "cipherSuites") {
             self.cipherSuites = cipherSuites
         }
 
-        // TODO: Important! This needs to be fleshed out to support SSL
+        // TODO: Trust roots and client-certificate material are not yet
+        // configurable — connections verify against the platform default
+        // trust store. Future keys belong in this same `tls.` scope
+        // (e.g. `trustRootsPath`, `clientCertificatePath`, `privateKeyPath`).
     }
 }
 
-private enum TLSOption: String {
+private enum TLSMode: String {
     case disable
     case prefer
     case require
