@@ -23,10 +23,6 @@ private final class RecordingService: ManagedService, @unchecked Sendable {
     private(set) var startWasCalled = false
     private(set) var shutdownWasCalled = false
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     func start() async throws {
         startWasCalled = true
     }
@@ -241,7 +237,7 @@ struct ServiceLifecycleIntegrationTests {
         let services = Mutex<[RecordingService]>([])
 
         let graph = try ServiceGraph(descriptors: [
-            EntryDescriptor(key, subgroup: .integrations) { _ in
+            EntryDescriptor(key, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50))) { _ in
                 let s = RecordingService()
                 services.withLock { $0.append(s) }
                 return s

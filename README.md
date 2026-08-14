@@ -21,17 +21,25 @@ same service graph and configuration story.
 
 ## Features
 
-- **Declarative service graph**. Services are registered via typed
-  `ServiceKey<T>` values exposed as keypath-accessible properties on
-  the `Services` namespace. Backplane boots only the transitive
-  closure of a command's required services, with per-subgroup
-  failure policies, blue-green replacement, hot reload, and
-  recovery of failed entries.
+- **Self-describing services**. A type conforming to
+  `BackplaneService` carries its own construction
+  (`static make(context:)`), dependencies, subgroup, and replacement
+  strategy — naming its key in a command's `requiredServices` is the
+  entire registration. `services()` exists only for overrides:
+  protocol-key bindings, third-party types via closures, test
+  doubles. Backplane boots only the transitive closure of a command's
+  required services, with per-subgroup failure policies, blue-green
+  or cold replacement, hot reload, and recovery of failed entries.
 - **Keypath-driven references**. `\.database` style references
   everywhere — autocomplete-friendly and the resolved type is
   inferred from the keypath. A key's resolved type can also be a
   protocol, backed by a concrete registration (`passive:` /
   `factory:as:` on `EntryDescriptor`).
+- **Per-entry configuration scopes**. A factory's
+  `context.config` is pre-scoped to its entry id — the entry
+  `"postgres"` reads `postgres.host` as `host`, and the same service
+  type registered under two keys reads two scopes (two databases, one
+  type).
 - **Two command shapes**: `PersistentCommand` (services run until
   signalled) and `TaskCommand` (services come up, the command does
   its work, the group shuts down gracefully).
@@ -58,7 +66,7 @@ same service graph and configuration story.
 Add Backplane to `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/<org>/swift-backplane.git", from: "1.0.0"),
+.package(url: "https://github.com/<org>/swift-backplane.git", from: "2.0.0"),
 ```
 
 By default, only the core `Backplane` library is resolved. Optional
@@ -68,7 +76,7 @@ the ones you need:
 ```swift
 .package(
     url: "https://github.com/<org>/swift-backplane.git",
-    from: "1.0.0",
+    from: "2.0.0",
     traits: ["Postgres", "OTel", "GCP"]
 ),
 ```
@@ -98,6 +106,10 @@ Then depend on each library product in the targets that need it:
 
 ## At a glance
 
+No `services()` registry — `\.postgres` is required by the commands,
+and `BackplanePostgresService` conforms to `BackplaneService`, so its
+entry (and its config scope) materialises from the key alone:
+
 ```swift
 import Backplane
 import BackplanePostgres
@@ -106,10 +118,6 @@ import BackplanePostgres
 struct MyApp: BackplaneApplication {
     typealias RootCommand = AppCommand
     static let identifier = "my-app"
-
-    static func services() -> [EntryDescriptor] {
-        [postgresEntryDescriptor()]
-    }
 }
 
 struct AppCommand: AsyncParsableCommand {
@@ -126,7 +134,7 @@ struct Serve: PersistentCommand {
     @OptionGroup var logging: LoggingOptions
     @OptionGroup var tracing: TracingOptions
 
-    var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
+    var requiredServices: ServiceList { [\.postgres] }
 
     func bootstrap(config: ConfigReader, environment: Environment) async throws -> BootstrapPlan {
         var plan = BootstrapPlan()
@@ -139,9 +147,9 @@ struct Serve: PersistentCommand {
 struct Migrate: TaskCommand {
     typealias App = MyApp
     static let configuration = CommandConfiguration(abstract: "Run database migrations")
-    var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
+    var requiredServices: ServiceList { [\.postgres] }
 
-    func execute(with context: ServiceContext) async throws {
+    func execute(with context: BackplaneContext) async throws {
         let pg = try await context.requireService(\.postgres)
         try await PostgresMigrator.migrate(
             myMigrations,
@@ -151,6 +159,44 @@ struct Migrate: TaskCommand {
     }
 }
 ```
+
+## Writing a service
+
+A service that conforms to `BackplaneService` is complete at the point
+it's written — construction, dependencies, subgroup, and replacement
+strategy all live on the type:
+
+```swift
+final class Notifier: BackplaneService {
+    let webhookURL: String
+    init(webhookURL: String) { self.webhookURL = webhookURL }
+
+    static func make(context: BackplaneContext) async throws -> Notifier {
+        // context.config is pre-scoped to the entry id ("notifier").
+        Notifier(webhookURL: try context.requireConfig().requiredString(forKey: "webhookURL"))
+    }
+    static var dependencies: ServiceList { [\.postgres] }
+    static var subgroup: SubgroupTag { .integrations }
+
+    func start() async throws { /* … */ }
+    func shutdown() async { /* … */ }
+}
+
+extension Services {
+    public var notifier: ServiceKey<Notifier> { "notifier" }
+}
+```
+
+Declare `[\.notifier]` in a command's `requiredServices` and Backplane
+materialises the entry, its `postgres` dependency, and both config
+scopes — nothing else to write.
+
+For everything a conformance can't express, `services()` on the app is
+the override surface: bind a protocol key to a concrete
+implementation (`passive:` / `factory:as:`), build a third-party type
+with a closure, swap in a test double, or override a conforming type's
+defaults (`EntryDescriptor(\.postgres, subgroup: .integrations)` —
+explicit descriptors always win).
 
 ## Declaring service keys
 
@@ -173,7 +219,8 @@ declaration. The keypath `\.database` is then usable wherever
 Backplane accepts a service key — `requireService`, dependency lists
 on `EntryDescriptor`, `requiredServices` on a command. The return
 type of `requireService(\.database)` is inferred from the keypath, so
-no cast is needed at the call site.
+no cast is needed at the call site. The key's `id` doubles as the
+entry's configuration scope.
 
 Satellite targets ship their keys the same way: `BackplanePostgres`
 exposes `Services.postgres`, which is why the snippet above writes

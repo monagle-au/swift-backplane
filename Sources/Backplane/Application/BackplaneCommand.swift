@@ -46,7 +46,7 @@ private struct UncheckedSendableBox<T>: @unchecked Sendable {
 ///
 ///     var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
 ///
-///     func execute(with context: ServiceContext) async throws {
+///     func execute(with context: BackplaneContext) async throws {
 ///         let db = try await context.requireService(\.postgres)
 ///         try await runMigrations(db)
 ///     }
@@ -59,8 +59,12 @@ public protocol BackplaneCommand: AsyncParsableCommand {
 
     /// The service keys whose transitive dependencies will be booted
     /// before the command runs. Declared as keypaths over the
-    /// ``Services`` namespace — `\.postgres`, `\.database`, etc.
-    var requiredServices: [PartialKeyPath<Services>] { get }
+    /// ``Services`` namespace — `[\.postgres, \.database]`.
+    ///
+    /// Keys whose `Value` conforms to ``BackplaneService`` need no
+    /// `services()` entry — the framework materialises their default
+    /// descriptors (and their static dependencies') automatically.
+    var requiredServices: ServiceList { get }
 
     /// Called after all required services have been built and started.
     ///
@@ -71,11 +75,11 @@ public protocol BackplaneCommand: AsyncParsableCommand {
     /// Override this in ``TaskCommand`` conformances to perform work
     /// and then allow the service group to shut down.
     ///
-    /// - Parameter context: A command-scoped ``ServiceContext`` carrying
+    /// - Parameter context: A command-scoped ``BackplaneContext`` carrying
     ///   the application logger and forwarding `service(_:)`
     ///   / `requireService(_:timeout:)` calls to the
     ///   running ``ServiceGraph``.
-    func execute(with context: ServiceContext) async throws
+    func execute(with context: BackplaneContext) async throws
 
     /// The lifecycle mode for this command.
     ///
@@ -107,7 +111,7 @@ public protocol BackplaneCommand: AsyncParsableCommand {
 
 extension BackplaneCommand {
     /// Default no-op execute — appropriate for persistent commands.
-    public func execute(with context: ServiceContext) async throws {}
+    public func execute(with context: BackplaneContext) async throws {}
 
     /// Default lifecycle mode — persistent.
     public var lifecycleMode: ServiceLifecycleMode { .persistent }
@@ -132,8 +136,9 @@ extension BackplaneCommand {
     /// 3. Calls ``bootstrap(config:environment:)`` and applies the
     ///    returned plan via ``BootstrapCoordinator/shared``.
     /// 4. Constructs the application's root `Logger`.
-    /// 5. Calls `App.services()` to gather descriptors and builds a
-    ///    ``ServiceGraph``.
+    /// 5. Calls `App.services()` for explicit descriptors, materialises
+    ///    defaults for ``BackplaneService``-conforming keys reachable
+    ///    from ``requiredServices``, and builds a ``ServiceGraph``.
     /// 6. Creates an `ApplicationRunner` and invokes its `run`,
     ///    passing the plan's ``BootstrapPlan/lifecycleServices`` so
     ///    things like an OTel exporter run alongside graph entries.
@@ -146,7 +151,10 @@ extension BackplaneCommand {
 
         let logger = Logger(label: App.identifier)
 
-        let descriptors = App.services()
+        let descriptors = try ServiceGraph.materializedDescriptors(
+            explicit: App.services(),
+            roots: requiredServices
+        )
         let graph = try ServiceGraph(
             descriptors: descriptors,
             logger: logger,
@@ -161,7 +169,7 @@ extension BackplaneCommand {
             logger: logger
         )
 
-        let requiredCopy = requiredServices.map { AnyServiceKey(keyPath: $0) }
+        let requiredCopy = requiredServices.elements.map { AnyServiceKey(keyPath: $0) }
         let lifecycleServicesCopy = plan.lifecycleServices
 
         if lifecycleMode == .task {
@@ -171,7 +179,7 @@ extension BackplaneCommand {
                 lifecycleServices: lifecycleServicesCopy
             )
         } else {
-            let noExecute: (@Sendable (ServiceContext) async throws -> Void)? = nil
+            let noExecute: (@Sendable (BackplaneContext) async throws -> Void)? = nil
             try await runner.run(
                 requiredServices: requiredCopy,
                 mode: .persistent,
@@ -188,7 +196,7 @@ extension BackplaneCommand {
         lifecycleServices: [LifecycleService]
     ) async throws {
         let box = UncheckedSendableBox(value: self)
-        let executeClosure: @Sendable (ServiceContext) async throws -> Void = { context in
+        let executeClosure: @Sendable (BackplaneContext) async throws -> Void = { context in
             try await box.value.execute(with: context)
         }
         try await runner.run(
@@ -233,7 +241,7 @@ public protocol PersistentCommand: BackplaneCommand {}
 ///     static let configuration = CommandConfiguration(abstract: "Run migrations")
 ///     var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
 ///
-///     func execute(with context: ServiceContext) async throws {
+///     func execute(with context: BackplaneContext) async throws {
 ///         let db = try await context.requireService(\.postgres)
 ///         try await PostgresMigrator(client: db).migrate()
 ///     }
@@ -245,7 +253,7 @@ public protocol TaskCommand: BackplaneCommand {
     /// Called after all required services have been started. When this
     /// method returns or throws, the service group is gracefully shut
     /// down.
-    func execute(with context: ServiceContext) async throws
+    func execute(with context: BackplaneContext) async throws
 }
 
 extension TaskCommand {

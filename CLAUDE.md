@@ -21,35 +21,66 @@ Requires Swift 6.2+, macOS 15+.
 ### Core types (always available, target: `Backplane`)
 
 **`ServiceGraph`** — actor managing the live entry set. Coordinates
-boot (factory + start), blue-green replacement (`restart(at:)`), hot
-reload (`reload(at:)`), cold re-boot of `.failed` entries
-(`recover(at:)`), and shutdown. Boots only the transitive closure of
-the boot roots. Failure policies partition per-subgroup.
+boot (factory + start), replacement (`restart(at:)` — blue-green or
+cold, per the descriptor's declared strategy), hot reload
+(`reload(at:)`), cold re-boot of `.failed` entries (`recover(at:)`),
+and shutdown. Boots only the transitive closure of the boot roots.
+Failure policies partition per-subgroup.
+`ServiceGraph.materializedDescriptors(explicit:roots:)` combines
+explicit descriptors with defaults materialised from
+`BackplaneService`-conforming keys.
+
+**`BackplaneService`** — the self-describing service protocol
+(refines `ManagedService`). Carries `static make(context:)`,
+`static dependencies: ServiceList`, `static subgroup`, and
+`static replacementStrategy`. A `ServiceKey` whose `Value` conforms
+needs **no** `services()` entry — the graph materialises its default
+descriptor when a command requires it. Conforming classes should be
+`final`.
 
 **`EntryDescriptor`** — value-type declaration of one entry. Carries
-`id`, factory closure `(ServiceContext) async throws -> any ManagedService`,
-`ConfigurationRequirement`, `SubgroupTag`, dependency list. Initialise
-via `EntryDescriptor(key, …) { context in … }`.
+`id`, factory closure `(BackplaneContext) async throws -> any ManagedService`,
+`SubgroupTag`, dependency list, and `replacement: ReplacementStrategy`.
+Closure-free form for conforming types
+(`EntryDescriptor(\.database, subgroup: …)` — nil params fall back to
+the type's statics); closure forms (`factory:` / `passive:` /
+`factory:as:`) for third-party types and protocol-key bindings.
 
-**`ServiceContext`** — passed into factories. Exposes the entry's
-logger, `ConfigReader?` scoped to the entry, environment, and both
+**`BackplaneContext`** — passed into factories and `make(context:)`.
+Exposes the entry's logger, a `ConfigReader?` **scoped to the entry
+id** (plus `rootConfig` for cross-cutting keys), environment, and both
 keypath-flavoured (`requireService(\.foo)`) and explicit-key
-(`requireService(ServiceKey<T>)`) resolution.
+(`requireService(ServiceKey<T>)`) resolution. Distinct from
+`ServiceContextModule.ServiceContext` (swift-service-context's
+tracing-baggage type), which keeps its name.
 
 **`ServiceKey<Value>`** — typed identity for an entry. Exposed to
 consumers as keypath-addressable computed properties on the
-``Services`` namespace. `AnyServiceKey` is the type-erased form the
-graph indexes on; the keypath-erasing initialiser
-`AnyServiceKey(keyPath:)` handles the conversion at the framework
-boundary.
+``Services`` namespace. The `id` doubles as the entry's config scope.
+`AnyServiceKey` is the type-erased form the graph indexes on; the
+keypath-erasing initialiser `AnyServiceKey(keyPath:)` handles the
+conversion at the framework boundary.
 
 **`Services`** — the consumer-extension namespace. A `public struct`
 with a no-arg initialiser; consumers extend it with computed
 properties returning `ServiceKey<T>` so keys are addressable via
 `\.…` keypaths.
 
-**`ManagedService`** — the protocol entries implement. `start()` /
-`shutdown()` plus `replacementStrategy` (controls blue-green grace).
+**`ServiceList`** — the currency for keypath lists
+(`requiredServices`, `dependencies`). Array-literal
+(`[\.postgres, \.http]`) and variadic (`ServiceList(\.postgres)`)
+forms; hides the `PartialKeyPath<Services> & Sendable` composition
+from signatures.
+
+**`ManagedService`** — the lifecycle protocol: `start()` /
+`shutdown()`. Replacement strategy is *not* on the instance — it's
+declared on the descriptor (or `BackplaneService` static) and read
+before a replacement is built.
+
+**`ReplacementStrategy`** — `.blueGreen(grace:)` (default via
+`.standard`, 30 s grace) or `.coldRestart` (old shut down before new
+is built — for listeners and other exclusive-resource services;
+failures land `.failed`, recoverable via `recover(at:)`).
 
 **`LifecycleAdapter<S: Service>`** — wraps a
 `ServiceLifecycle.Service` as a `ManagedService`. `start()` spawns
@@ -59,7 +90,9 @@ a detached `inner.run()`; `shutdown()` cancels and awaits.
 as a `ManagedService` with no-op start/shutdown.
 
 **`HotReloadable`** — opt-in. `ServiceGraph.reload(at:)` calls
-`reload(config:)` instead of starting a new generation.
+`reload(config:)` (entry-scoped reader) instead of starting a new
+generation; non-conforming services fall back to `restart(at:)` under
+their declared strategy.
 
 **`SubgroupTag` / `SubgroupPolicy`** — partition entries by failure
 mode (`.failFast` / `.degraded`) and restartability. Stock policies
@@ -68,20 +101,22 @@ for `.core` and `.integrations`.
 ### Application harness
 
 **`BackplaneApplication`** — `@main` entry point. Declares
-`identifier`, `RootCommand: AsyncParsableCommand`, and
-`services() -> [EntryDescriptor]`.
+`identifier` and `RootCommand: AsyncParsableCommand`.
+`services() -> [EntryDescriptor]` defaults to `[]` and is the
+**override surface** — protocol-key bindings, third-party closures,
+test doubles, per-app overrides (explicit descriptors beat defaults).
 
 **`BackplaneCommand`** — protocol over `AsyncParsableCommand` with
-`requiredServices: [PartialKeyPath<Services>]` and
+`requiredServices: ServiceList` and
 `bootstrap(config:environment:) async throws -> BootstrapPlan`.
 
 - `PersistentCommand` — runs services until signal. No `execute`.
-- `TaskCommand` — services come up, `execute(with: ServiceContext)`
+- `TaskCommand` — services come up, `execute(with: BackplaneContext)`
   runs, group shuts down gracefully.
 
 **`ApplicationRunner`** — internal. Drives boot, runs the graph
 inside a `ServiceGroup`, executes `execute(with:)` if any, handles
-graceful shutdown.
+graceful shutdown. Command contexts keep root-scoped config.
 
 **`BootstrapPlan` / `BootstrapCoordinator`** — value-type plan
 applied per-subsystem-idempotently in tracing → metrics → logging
@@ -89,23 +124,54 @@ order, after CLI parsing, before the first `Logger` is built.
 
 ### Adding a service
 
-1. Extend `Services` with a computed property returning a typed
+1. Write the type as a `BackplaneService` — construction,
+   dependencies, and policies live on the type:
+
+```swift
+final class Notifier: BackplaneService {
+    static func make(context: BackplaneContext) async throws -> Notifier {
+        // context.config is pre-scoped to the entry id ("notifier").
+        Notifier(webhookURL: try context.requireConfig().requiredString(forKey: "webhookURL"))
+    }
+    static var dependencies: ServiceList { [\.postgres] }
+    static var subgroup: SubgroupTag { .integrations }
+
+    func start() async throws { … }
+    func shutdown() async { … }
+}
+```
+
+2. Extend `Services` with a computed property returning a typed
    `ServiceKey<T>`. No naming convention is imposed — name it for the
    value, not `…Key`:
 
 ```swift
 extension Services {
-    public var database: ServiceKey<PostgresClient> {
-        ServiceKey(id: "database")
-    }
+    public var notifier: ServiceKey<Notifier> { "notifier" }
 }
 ```
 
-2. Return an `EntryDescriptor` from `services()`. `PostgresClient` is a
-   passive value (no `start()`/`shutdown()` of its own), so register it
-   with the `passive:` initialiser — the graph wraps it in a
-   `PassiveService` for lifecycle and unwraps it on resolution, so the
-   wrapper never surfaces:
+3. Declare it on commands that need it — that's the whole
+   registration; the entry, its static dependencies, and their config
+   scopes materialise from the key:
+
+```swift
+var requiredServices: ServiceList { [\.notifier] }
+
+func execute(with context: BackplaneContext) async throws {
+    let notifier = try await context.requireService(\.notifier)
+}
+```
+
+The same type may back multiple keys — each entry reads its own
+config scope (two Postgres keys = two databases).
+
+**When a conformance can't express it, use `services()`** (explicit
+descriptors always win over defaults):
+
+- Third-party passive values via `passive:` — the graph wraps in
+  `PassiveService` for lifecycle and unwraps on resolution, so the
+  resolved type is the value itself, no `.inner`:
 
 ```swift
 static func services() -> [EntryDescriptor] {
@@ -117,22 +183,9 @@ static func services() -> [EntryDescriptor] {
 }
 ```
 
-3. Declare it as a `requiredService` on commands that need it and
-   resolve via `context.requireService(\.database)` — the resolved type
-   is `PostgresClient`, no `.inner`:
-
-```swift
-var requiredServices: [PartialKeyPath<Services>] { [\.database] }
-
-func execute(with context: ServiceContext) async throws {
-    let db = try await context.requireService(\.database)
-}
-```
-
-A key's resolved `Value` need not equal the registered concrete type —
-it can be a **protocol**. Register a concrete passive value behind a
-protocol key with `passive:`, or project a concrete `ManagedService`
-onto a protocol key with `factory:as:`:
+- A key's resolved `Value` can be a **protocol**. Register a concrete
+  passive value behind a protocol key with `passive:`, or project a
+  concrete `ManagedService` onto a protocol key with `factory:as:`:
 
 ```swift
 extension Services {
@@ -148,21 +201,24 @@ EntryDescriptor(Services().auditStore,
     as: { $0 })                                      // -> any AuditStore
 ```
 
+- Overriding a conforming type's defaults:
+  `EntryDescriptor(\.postgres, subgroup: .integrations, replacement: .coldRestart)`.
+
 ### Writing a command
 
-Single-command app:
+Single-command app (no `services()` needed when the required types
+conform to `BackplaneService`):
 ```swift
 @main
 struct MyApp: BackplaneApplication {
     typealias RootCommand = ServeCommand
     static let identifier = "my-app"
-    static func services() -> [EntryDescriptor] { [...] }
 }
 
 struct ServeCommand: PersistentCommand {
     typealias App = MyApp
     static let configuration = CommandConfiguration(abstract: "Run the server")
-    var requiredServices: [PartialKeyPath<Services>] { [\.database] }
+    var requiredServices: ServiceList { [\.database] }
 }
 ```
 
@@ -174,8 +230,9 @@ The `RootCommand` associated type is the outer `AsyncParsableCommand`.
 Each is opt-in via a Swift Package trait — consumers pay nothing
 for what they don't enable.
 
-- **`BackplanePostgres`** (`Postgres`) — `Services.postgres`,
-  `postgresEntryDescriptor()`, `PostgresMigrator`, config builder.
+- **`BackplanePostgres`** (`Postgres`) — `Services.postgres`
+  (`BackplanePostgresService: BackplaneService`, so requiring the key
+  is the whole registration), `PostgresMigrator`, config builder.
 - **`BackplaneOTel`** (`OTel`) — `BackplaneOTel.makeBootstrap(...)`,
   `OTelTracingOptions`, `OTelMetricsOptions`.
 - **`BackplaneGCP`** (`GCP`) — `GCPLogHandler`, `GCPTracer`,
@@ -214,6 +271,9 @@ Swift 6.2 strict concurrency throughout. All public types are
 `Sendable` or actor-isolated. `ServiceGraph` is an actor; per-entry
 state lives in `Mutex<State>` for nonisolated reads. `LifecycleAdapter`
 uses an internal `Mutex<Task<Void, Never>?>` for the run-task handle.
+Key-path lists travel as `ServiceList`
+(`PartialKeyPath<Services> & Sendable` elements — literals satisfy the
+constraint automatically).
 
 ## Testing
 
@@ -225,8 +285,8 @@ suites that use them.
 
 ## Design notes
 
-- `docs/design/backplane.md` — service-graph design, blue-green
-  replacement, subgroups, ServiceContext, keypath-on-`Services`
-  declaration pattern.
+- `docs/design/backplane.md` — service-graph design (2.0 addendum:
+  environment-model registration), replacement strategies, subgroups,
+  BackplaneContext, keypath-on-`Services` declaration pattern.
 - `docs/design/backplane-vault.md` — `BackplaneVault`'s
   encryption-aware config story.

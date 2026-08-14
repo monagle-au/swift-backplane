@@ -34,10 +34,12 @@ The default flow:
    swift-distributed-tracing / swift-metrics defaults.
 5. The root `Logger` is built. With no bootstrap, swift-log writes
    plain text to stderr.
-6. ``BackplaneApplication/services()`` supplies the descriptors, the
-   ``ServiceGraph`` boots the transitive closure of the command's
-   `requiredServices`, and the `ServiceGroup` runs until the
-   process is signalled.
+6. ``BackplaneApplication/services()`` supplies any explicit
+   descriptors, the framework materialises defaults for
+   ``BackplaneService``-conforming keys named in the command's
+   `requiredServices`, the ``ServiceGraph`` boots the transitive
+   closure, and the `ServiceGroup` runs until the process is
+   signalled.
 
 ## Pick a log level
 
@@ -98,22 +100,25 @@ diagnostic output.
 
 ## Talk to a local Postgres
 
-When the `Postgres` package trait is enabled, add the supplied
-descriptor to `services()`:
+When the `Postgres` package trait is enabled, declaring the
+dependency is the entire registration —
+`BackplanePostgresService` conforms to ``BackplaneService``, so
+no `services()` entry is needed:
 
 ```swift
 import BackplanePostgres
 
-extension MyApp {
-    static func services() -> [EntryDescriptor] {
-        [postgresEntryDescriptor()]
-    }
+struct Migrate: TaskCommand {
+    typealias App = MyApp
+    var requiredServices: ServiceList { [\.postgres] }
+    // …
 }
 ```
 
-Commands that need the client declare `\.postgres` in their
-`requiredServices` and resolve it via
-`context.requireService(\.postgres)`.
+Commands resolve the client via
+`context.requireService(\.postgres)`. To override the entry's
+policies, add an explicit descriptor to `services()` — for
+example `EntryDescriptor(\.postgres, subgroup: .integrations)`.
 
 Drive the connection via env vars — an
 `EnvironmentVariablesProvider` maps each `postgres.*` config key

@@ -57,9 +57,19 @@ public protocol BackplaneApplication: Sendable {
     /// diagnostic messages.
     static var identifier: String { get }
 
-    /// Produces the full set of service descriptors the application may
-    /// need. Commands select which subset boots via their
-    /// ``BackplaneCommand/requiredServices``.
+    /// Explicit service descriptors — the **override surface**, not a
+    /// mandatory manifest.
+    ///
+    /// Keys whose `Value` conforms to ``BackplaneService`` need no entry
+    /// here: the framework materialises their defaults from each
+    /// command's ``BackplaneCommand/requiredServices`` and the types'
+    /// static dependencies. List only what defaults can't express —
+    /// protocol-key bindings (`passive:` / `factory:as:`), third-party
+    /// types built via closures, test doubles, and per-app overrides of
+    /// a conforming type's subgroup/dependencies/replacement (an
+    /// explicit descriptor for a key id always beats the default).
+    ///
+    /// The default implementation returns `[]`.
     ///
     /// Called once during startup, before any command runs.
     static func services() -> [EntryDescriptor]
@@ -107,5 +117,12 @@ extension BackplaneApplication {
     /// only.
     public static func configReader(for environment: Environment) async throws -> ConfigReader {
         ConfigReader(provider: EnvironmentVariablesProvider())
+    }
+
+    /// Default implementation — no explicit descriptors. Apps whose
+    /// services all conform to ``BackplaneService`` don't declare
+    /// `services()` at all.
+    public static func services() -> [EntryDescriptor] {
+        []
     }
 }

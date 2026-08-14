@@ -1,5 +1,5 @@
 //
-//  ServiceContext.swift
+//  BackplaneContext.swift
 //  swift-backplane
 //
 
@@ -19,7 +19,7 @@ import Logging
 /// **Naming note:** distinct from `ServiceContextModule.ServiceContext`
 /// (swift-service-context's tracing-baggage type). The two are different
 /// concepts; the 1.0 extensions on the SSWG type are preserved unchanged.
-public final class ServiceContext: Sendable {
+public final class BackplaneContext: Sendable {
 
     /// Entry identifier. Stable for the entry's lifetime.
     public let entryID: String
@@ -37,12 +37,23 @@ public final class ServiceContext: Sendable {
     /// for the service.
     public let health: any ServiceHealthReporter
 
-    /// Application configuration reader. `nil` when the graph was
-    /// constructed without a config (e.g. unit tests of the graph
-    /// machinery itself). Factories that need configuration unconditionally
-    /// should prefer ``requireConfig()`` to avoid open-coding the
-    /// nil check.
+    /// Configuration reader **scoped to the entry's id**. An entry with
+    /// id `"postgres"` reads `postgres.host` as `host` — no hand-scoping
+    /// at the call site, and the same service type registered under two
+    /// keys reads two config scopes (multi-instance).
+    ///
+    /// `nil` when the graph was constructed without a config (e.g. unit
+    /// tests of the graph machinery itself). Factories that need
+    /// configuration unconditionally should prefer ``requireConfig()``
+    /// to avoid open-coding the nil check. For cross-cutting keys
+    /// outside the entry's scope, use ``rootConfig``.
     public let config: ConfigReader?
+
+    /// The application's unscoped configuration reader — the escape
+    /// hatch for cross-cutting keys (`logging.level`, feature flags)
+    /// that live outside the entry's scope. `nil` exactly when
+    /// ``config`` is nil.
+    public let rootConfig: ConfigReader?
 
     /// Captured graph reference for forwarding lookups. Hidden from the
     /// public surface so callers can't reach into actor-isolated state.
@@ -54,6 +65,7 @@ public final class ServiceContext: Sendable {
         lifecycle: any ServiceLifecycleHandle,
         health: any ServiceHealthReporter,
         config: ConfigReader? = nil,
+        rootConfig: ConfigReader? = nil,
         graph: ServiceGraph
     ) {
         self.entryID = entryID
@@ -61,6 +73,7 @@ public final class ServiceContext: Sendable {
         self.lifecycle = lifecycle
         self.health = health
         self.config = config
+        self.rootConfig = rootConfig ?? config
         self.graph = graph
     }
 
@@ -125,7 +138,7 @@ public final class ServiceContext: Sendable {
 
     // MARK: - Configuration
 
-    /// Return the application's `ConfigReader`, or throw
+    /// Return the entry-scoped `ConfigReader`, or throw
     /// ``ServiceGraphError/missingConfigReader(entryID:)`` if the
     /// graph was constructed without one.
     ///
@@ -134,8 +147,8 @@ public final class ServiceContext: Sendable {
     /// else { fatalError(...) }` block on every entry.
     ///
     /// ```swift
-    /// let config = try context.requireConfig().scoped(to: "postgres")
-    /// let pgConfig = PostgresClient.Configuration(config: config)
+    /// // Entry id "postgres" — the reader is already scoped to it.
+    /// let pgConfig = PostgresClient.Configuration(config: try context.requireConfig())
     /// ```
     public func requireConfig() throws -> ConfigReader {
         guard let config else {

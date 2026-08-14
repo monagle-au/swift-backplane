@@ -5,9 +5,15 @@
 
 /// How the ``ServiceGraph`` replaces a service when it is restarted.
 ///
-/// The default is ``blueGreen(grace:)`` with a 30-second grace period. Most
-/// services should accept this default. Override when the service
-/// exclusively owns a resource that prevents two instances coexisting.
+/// Declared per entry on ``EntryDescriptor`` (`replacement:`), or via
+/// ``BackplaneService/replacementStrategy`` for self-describing service
+/// types. The graph reads the strategy from the descriptor *before*
+/// constructing the replacement instance.
+///
+/// The default is ``standard`` — blue-green with a 30-second grace
+/// period. Most services should accept this default. Override with
+/// ``coldRestart`` when the service exclusively owns a resource that
+/// prevents two instances coexisting.
 public enum ReplacementStrategy: Sendable {
     /// Start a new generation alongside the old; atomically swap the
     /// active pointer once the new generation's ``ManagedService/start()``
@@ -18,15 +24,21 @@ public enum ReplacementStrategy: Sendable {
     /// otherwise require sentinel machinery on the consumer side.
     case blueGreen(grace: Duration)
 
-    /// Apply new configuration in place — no new generation, no swap.
-    /// Requires the service to conform to ``HotReloadable``. If it does
-    /// not, the graph logs a warning and falls back to ``blueGreen(grace:)``.
-    case hotReload
-
     /// Shut the old instance down before starting the new one.
     /// Callers landing in the gap receive nil from
-    /// ``ServiceGraph/resolve(_:)``. Use only when two instances cannot
+    /// ``ServiceGraph/resolve(_:)``; ``ServiceGraph/requireService(_:timeout:)``
+    /// callers wait through the gap. Use when two instances cannot
     /// coexist (bound TCP ports, exclusive file locks, single-writer
     /// database connections).
+    ///
+    /// A failure while the replacement constructs or starts leaves the
+    /// entry ``ServiceState/failed(fault:)`` — nothing is serving — and
+    /// recoverable via ``ServiceGraph/recover(at:)``.
     case coldRestart
+
+    /// The package-wide default: ``blueGreen(grace:)`` with a 30-second
+    /// grace period.
+    public static var standard: ReplacementStrategy {
+        .blueGreen(grace: .seconds(30))
+    }
 }

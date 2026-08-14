@@ -37,7 +37,7 @@
 ///
 /// Because the `Value` can be a protocol existential, `passive:` also
 /// keys a protocol against a concrete passive implementation — see
-/// ``EntryDescriptor/init(_:configuration:subgroup:dependencies:passive:)-(ServiceKey<Value>,_,_,_,_)``.
+/// ``EntryDescriptor/init(_:subgroup:dependencies:replacement:passive:)-(ServiceKey<Value>,_,_,_,_)``.
 ///
 /// For types that *do* have a run loop, prefer ``LifecycleAdapter``;
 /// to project a concrete `ManagedService` onto a protocol key, use the

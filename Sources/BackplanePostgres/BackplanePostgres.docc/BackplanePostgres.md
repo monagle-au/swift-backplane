@@ -9,11 +9,12 @@ ergonomic query helpers for Backplane applications.
 to bring `postgres-nio` into the dependency graph and link this
 target. It contributes:
 
-- ``BackplanePostgresService`` — a `ManagedService` wrapper around
-  `PostgresClient` — plus the `Services.postgres` key and the
-  ``postgresEntryDescriptor(subgroup:dependencies:)`` factory, so
-  commands declare a Postgres dependency the same way as any other
-  service (`\.postgres`).
+- ``BackplanePostgresService`` — a `BackplaneService` wrapper
+  around `PostgresClient` — plus the `Services.postgres` key.
+  Because the type is self-describing, naming `\.postgres` in a
+  command's `requiredServices` is the entire registration; an
+  explicit `EntryDescriptor(\.postgres, …)` in `services()`
+  overrides its policies.
 - A configuration builder (`PostgresClient.Configuration(config:)`)
   that maps a `ConfigReader` scope onto the full set of
   postgres-nio knobs — connection mode (host/port or unix socket),
@@ -35,7 +36,6 @@ target. It contributes:
 ### Service registration
 
 - ``BackplanePostgresService``
-- ``postgresEntryDescriptor(subgroup:dependencies:)``
 
 ### Configuration
 

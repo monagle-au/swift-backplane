@@ -155,6 +155,95 @@ struct PostgresConfigTests {
         pgConfig.applyPoolAndTimeoutOverrides(from: config.scoped(to: "postgres"))
         #expect(pgConfig.options.maximumConnections == 30)
     }
+
+    // MARK: - TLS (`tls.` sub-scope)
+
+    /// `PostgresClient.Configuration.TLS` exposes no public
+    /// introspection, so reflect its internal `base` enum to observe the
+    /// resolved mode and the `NIOSSL.TLSConfiguration` it carries.
+    private func tlsCase(
+        of pgConfig: PostgresClient.Configuration
+    ) -> (mode: String, tlsConfig: TLSConfiguration?) {
+        guard
+            let base = Mirror(reflecting: pgConfig.tls).children
+                .first(where: { $0.label == "base" })?.value
+        else { return ("<no base>", nil) }
+        if let payload = Mirror(reflecting: base).children.first {
+            return (payload.label ?? "<unlabelled>", payload.value as? TLSConfiguration)
+        }
+        return (String(describing: base), nil)
+    }
+
+    @Test("absent tls keys default to disable")
+    func tlsDefaultsToDisable() async {
+        let config = await makeConfig([
+            "postgres.host": "x",
+            "postgres.username": "u",
+            "postgres.password": "p",
+            "postgres.database": "d",
+        ])
+        let pgConfig = PostgresClient.Configuration(config: config.scoped(to: "postgres"))
+        #expect(tlsCase(of: pgConfig).mode == "disable")
+    }
+
+    @Test("tls.mode=prefer builds a prefer configuration")
+    func tlsPrefer() async {
+        let config = await makeConfig([
+            "postgres.host": "x",
+            "postgres.username": "u",
+            "postgres.password": "p",
+            "postgres.database": "d",
+            "postgres.tls.mode": "prefer",
+        ])
+        let pgConfig = PostgresClient.Configuration(config: config.scoped(to: "postgres"))
+        let (mode, tlsConfig) = tlsCase(of: pgConfig)
+        #expect(mode == "prefer")
+        #expect(tlsConfig != nil)
+    }
+
+    @Test("tls.mode=require applies nested version and cipher keys")
+    func tlsRequireWithKnobs() async {
+        let config = await makeConfig([
+            "postgres.host": "x",
+            "postgres.username": "u",
+            "postgres.password": "p",
+            "postgres.database": "d",
+            "postgres.tls.mode": "require",
+            "postgres.tls.minimumVersion": "tlsv12",
+            "postgres.tls.maximumVersion": "tlsv13",
+            "postgres.tls.cipherSuites": "ECDHE-RSA-AES256-GCM-SHA384",
+        ])
+        let pgConfig = PostgresClient.Configuration(config: config.scoped(to: "postgres"))
+        let (mode, tlsConfig) = tlsCase(of: pgConfig)
+        #expect(mode == "require")
+        #expect(tlsConfig?.minimumTLSVersion == .tlsv12)
+        #expect(tlsConfig?.maximumTLSVersion == .tlsv13)
+        #expect(tlsConfig?.cipherSuites == "ECDHE-RSA-AES256-GCM-SHA384")
+    }
+
+    @Test("legacy flat TLS keys (pre-2.0) are not read")
+    func legacyFlatTLSKeysIgnored() async {
+        let config = await makeConfig([
+            "postgres.host": "x",
+            "postgres.username": "u",
+            "postgres.password": "p",
+            "postgres.database": "d",
+            "postgres.base": "require",
+            "postgres.minimumTLSVersion": "tlsv12",
+        ])
+        let pgConfig = PostgresClient.Configuration(config: config.scoped(to: "postgres"))
+        #expect(tlsCase(of: pgConfig).mode == "disable")
+    }
+
+    @Test("TLSConfiguration.configure reads keys at the reader's own scope")
+    func configureAppliesKnobs() async {
+        let config = await makeConfig([
+            "tls.minimumVersion": "tlsv13",
+        ])
+        var tlsConfig = TLSConfiguration.makeClientConfiguration()
+        tlsConfig.configure(config.scoped(to: "tls"))
+        #expect(tlsConfig.minimumTLSVersion == .tlsv13)
+    }
 }
 
 #endif

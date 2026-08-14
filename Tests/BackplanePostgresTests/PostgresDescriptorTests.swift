@@ -2,10 +2,11 @@
 //  PostgresDescriptorTests.swift
 //  swift-backplane
 //
-//  Tests for the 2.0 BackplanePostgres surface: the public key,
-//  the descriptor helper, and the missingConfigReader error path.
-//  Does not exercise the live PostgresClient — that requires a
-//  running Postgres and is out of scope for CI.
+//  Tests for the 2.0 BackplanePostgres surface: the public key, default
+//  materialisation from the BackplaneService conformance, and the
+//  missingConfigReader error path. Does not exercise the live
+//  PostgresClient — that requires a running Postgres and is out of
+//  scope for CI.
 //
 
 #if BACKPLANE_POSTGRES
@@ -16,7 +17,7 @@ import BackplanePostgres
 import Logging
 import Testing
 
-@Suite("BackplanePostgres — descriptor surface")
+@Suite("BackplanePostgres — key and default materialisation")
 struct PostgresDescriptorTests {
 
     @Test("postgres key carries the expected id")
@@ -24,12 +25,26 @@ struct PostgresDescriptorTests {
         #expect(Services().postgres.id == "postgres")
     }
 
-    @Test("postgresEntryDescriptor() produces a descriptor whose factory throws when the graph has no config")
-    func descriptorThrowsWithoutConfig() async throws {
-        // Graph constructed *without* a ConfigReader. The descriptor's
-        // factory should throw on boot.
+    @Test("Requiring \\.postgres materialises a default — no services() entry needed")
+    func defaultMaterialises() throws {
+        let descriptors = try ServiceGraph.materializedDescriptors(
+            explicit: [],
+            roots: [\.postgres]
+        )
+        #expect(descriptors.count == 1)
+    }
+
+    @Test("The materialised default's make(context:) throws when the graph has no config")
+    func defaultThrowsWithoutConfig() async throws {
+        let descriptors = try ServiceGraph.materializedDescriptors(
+            explicit: [],
+            roots: [\.postgres]
+        )
+
+        // Graph constructed *without* a ConfigReader — make(context:)
+        // requires one, so boot should record a failure.
         let graph = try ServiceGraph(
-            descriptors: [postgresEntryDescriptor()],
+            descriptors: descriptors,
             logger: Logger(label: "PostgresDescriptorTests")
         )
 
@@ -37,8 +52,6 @@ struct PostgresDescriptorTests {
             try await graph.boot(roots: [AnyServiceKey(Services().postgres)])
         }
 
-        // Drill into the entry's state to confirm the failure is
-        // recorded as a faulted .failed transition.
         let state = graph.state(of: Services().postgres.id)
         if case .failed(let fault) = state {
             #expect(fault.errorType.contains("ServiceGraphError"),
@@ -48,18 +61,24 @@ struct PostgresDescriptorTests {
         }
     }
 
-    @Test("postgresEntryDescriptor() accepts custom subgroup + dependencies")
-    func descriptorAcceptsCustomization() throws {
-        // We don't have @testable access here so we can't introspect
-        // the descriptor's internal `subgroup` / `dependencies`
-        // fields directly. What we can do: confirm the call shape
-        // compiles and produces a usable descriptor. Behavioural
-        // verification of subgroup partitioning + dependency ordering
-        // lives in Backplane's own graph tests.
-        _ = postgresEntryDescriptor(
-            subgroup: .integrations,
-            dependencies: [\.postgres]
+    @Test("Explicit descriptor overrides compile for subgroup and dependencies")
+    func closureFreeOverrideCompiles() {
+        // The closure-free override form — no factory needed because
+        // BackplanePostgresService conforms to BackplaneService.
+        _ = EntryDescriptor(\.postgres, subgroup: .integrations)
+    }
+
+    @Test("A second key with a different id materialises its own entry (multi-instance)")
+    func multiInstanceMaterialises() throws {
+        let analytics = ServiceKey<BackplanePostgresService>(id: "analytics")
+
+        // Both keys resolve BackplanePostgresService; each entry reads
+        // its own config scope (postgres.* vs analytics.*).
+        let descriptors = try ServiceGraph.materializedDescriptors(
+            explicit: [EntryDescriptor(analytics)],
+            roots: [\.postgres]
         )
+        #expect(descriptors.count == 2)
     }
 }
 

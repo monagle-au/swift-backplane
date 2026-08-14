@@ -2,9 +2,9 @@
 //  ConfigurationFlowTests.swift
 //  swift-backplane
 //
-//  Tests that ServiceContext.config carries through from
-//  ServiceGraph.init to a factory closure and that scoped() works
-//  as expected from inside a factory.
+//  Tests that BackplaneContext.config carries through from
+//  ServiceGraph.init to a factory closure, scoped to the entry id,
+//  with rootConfig as the unscoped escape hatch.
 //
 
 import Configuration
@@ -16,26 +16,22 @@ import Testing
 
 private final class ConfigCapturingService: ManagedService, @unchecked Sendable {
     let capturedValue: String?
-    let capturedScoped: String?
+    let capturedRoot: String?
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
-    init(capturedValue: String?, capturedScoped: String?) {
+    init(capturedValue: String?, capturedRoot: String? = nil) {
         self.capturedValue = capturedValue
-        self.capturedScoped = capturedScoped
+        self.capturedRoot = capturedRoot
     }
 
     func start() async throws {}
     func shutdown() async {}
 }
 
-@Suite("ServiceContext.config — flow into factories")
+@Suite("BackplaneContext.config — flow into factories")
 struct ConfigurationFlowTests {
 
-    @Test("Factory reads the same value the graph was constructed with")
-    func factoryReadsConfig() async throws {
+    @Test("context.config is scoped to the entry id; rootConfig is unscoped")
+    func factoryReadsScopedConfig() async throws {
         let config = ConfigReader(provider: InMemoryProvider(values: [
             "myService.host": .init(.string("example.com"), isSecret: false),
         ]))
@@ -45,11 +41,12 @@ struct ConfigurationFlowTests {
         let graph = try ServiceGraph(
             descriptors: [
                 EntryDescriptor(key) { context in
-                    let host = context.config?.string(forKey: "myService.host")
-                    let scopedHost = context.config?.scoped(to: "myService").string(forKey: "host")
+                    // Entry id "myService" — the reader is pre-scoped.
+                    let host = context.config?.string(forKey: "host")
+                    let rootHost = context.rootConfig?.string(forKey: "myService.host")
                     return ConfigCapturingService(
                         capturedValue: host,
-                        capturedScoped: scopedHost
+                        capturedRoot: rootHost
                     )
                 },
             ],
@@ -61,12 +58,43 @@ struct ConfigurationFlowTests {
 
         let svc = graph.resolve(key)
         #expect(svc?.capturedValue == "example.com",
-                "factory should have read the value via context.config")
-        #expect(svc?.capturedScoped == "example.com",
-                "factory should have read via context.config.scoped(to:)")
+                "context.config must be pre-scoped to the entry id")
+        #expect(svc?.capturedRoot == "example.com",
+                "rootConfig must expose the full, unscoped key space")
     }
 
-    @Test("Factory sees nil config when the graph was constructed without one")
+    @Test("Two keys, same service type, different ids read different scopes")
+    func multiInstanceScoping() async throws {
+        let config = ConfigReader(provider: InMemoryProvider(values: [
+            "primary.host": .init(.string("primary.db"), isSecret: false),
+            "analytics.host": .init(.string("analytics.db"), isSecret: false),
+        ]))
+
+        let primaryKey = ServiceKey<ConfigCapturingService>(id: "primary")
+        let analyticsKey = ServiceKey<ConfigCapturingService>(id: "analytics")
+
+        // One factory shape, two registrations — each context reads its
+        // own scope, which is what makes multi-instance registration work.
+        @Sendable func factory(_ context: BackplaneContext) -> ConfigCapturingService {
+            ConfigCapturingService(capturedValue: context.config?.string(forKey: "host"))
+        }
+
+        let graph = try ServiceGraph(
+            descriptors: [
+                EntryDescriptor(primaryKey) { factory($0) },
+                EntryDescriptor(analyticsKey) { factory($0) },
+            ],
+            logger: Logger(label: "ConfigurationFlowTests"),
+            config: config
+        )
+
+        try await graph.boot()
+
+        #expect(graph.resolve(primaryKey)?.capturedValue == "primary.db")
+        #expect(graph.resolve(analyticsKey)?.capturedValue == "analytics.db")
+    }
+
+    @Test("Factory sees nil config and nil rootConfig when the graph has none")
     func factorySeesNilWhenGraphHasNoConfig() async throws {
         let key = ServiceKey<ConfigCapturingService>(id: "myService")
 
@@ -75,10 +103,9 @@ struct ConfigurationFlowTests {
                 EntryDescriptor(key) { context in
                     #expect(context.config == nil,
                             "context.config should be nil when ServiceGraph.init didn't receive one")
-                    return ConfigCapturingService(
-                        capturedValue: nil,
-                        capturedScoped: nil
-                    )
+                    #expect(context.rootConfig == nil,
+                            "rootConfig should be nil exactly when config is nil")
+                    return ConfigCapturingService(capturedValue: nil)
                 },
             ],
             logger: Logger(label: "ConfigurationFlowTests")

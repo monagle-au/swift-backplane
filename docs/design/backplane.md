@@ -10,7 +10,7 @@ Backplane is a lightweight scaffold for Swift server applications: a
 small set of well-chosen SSWG libraries (swift-service-lifecycle,
 swift-argument-parser, swift-log, swift-service-context) drawn together
 with typed-key registration, dependency-ordered boot, and a
-`ServiceContext` for cross-service resolution. Restart-aware machinery
+`BackplaneContext` for cross-service resolution. Restart-aware machinery
 (blue-green replacement, hot reload, self-reported degradation) is
 available as an explicit opt-in for consumers who need it, but no
 consumer pays for it on the lead path.
@@ -46,10 +46,145 @@ are not migration instructions.
 
 ---
 
+## 0.1 Backplane 2.0 addendum — environment-model registration
+
+> This section is the delta for Backplane 2.0. Everything below it is
+> the 1.x design history — still the rationale of record, patched in
+> place wherever it stated as-built facts that 2.0 changed.
+
+**Motivation.** An audit of Backplane consumers ahead of 2.0 found
+that roughly 88% of factory closures ignored the context they were
+handed — the closure existed only to name an initialiser the
+framework could have called itself. Registration closures were
+ceremony in the modal case: the interesting facts about a service
+(how to build it, what it depends on, which subgroup it belongs to,
+how it should be replaced) were being restated at every registration
+site rather than declared once, where the service is written.
+
+**`BackplaneService` — self-describing services.** 2.0 adds a
+protocol refining `ManagedService` that moves those facts onto the
+type as statics:
+
+```swift
+public protocol BackplaneService: ManagedService {
+    static func make(context: BackplaneContext) async throws -> Self
+    static var dependencies: ServiceList { get }                 // default: []
+    static var subgroup: SubgroupTag { get }                     // default: .core
+    static var replacementStrategy: ReplacementStrategy { get }  // default: .standard
+}
+```
+
+A `ServiceKey` whose `Value` conforms needs **no** `services()`
+entry. `ServiceGraph.materializedDescriptors(explicit:roots:)`
+materialises a default `EntryDescriptor` for every conforming key a
+command's `requiredServices` reaches, walking each type's static
+`dependencies` transitively (a required key that neither has an
+explicit descriptor nor conforms throws
+`ServiceGraphError.unresolvableService(id:valueType:)`). Explicit
+descriptors always win over defaults for the same id, so
+`BackplaneApplication.services()` — which now defaults to `[]` — is
+the *override surface*: protocol-key bindings (`passive:` /
+`factory:as:`), closures for third-party types, test doubles, and
+per-app policy overrides (`EntryDescriptor(\.postgres,
+subgroup: .integrations)`). A minimal app collapses to:
+
+```swift
+final class Notifier: BackplaneService {
+    static func make(context: BackplaneContext) async throws -> Notifier {
+        // context.config is pre-scoped to the entry id ("notifier").
+        Notifier(webhookURL: try context.requireConfig().requiredString(forKey: "webhookURL"))
+    }
+    static var dependencies: ServiceList { [\.postgres] }
+
+    func start() async throws { /* … */ }
+    func shutdown() async { /* … */ }
+}
+
+extension Services {
+    public var notifier: ServiceKey<Notifier> { "notifier" }
+}
+
+@main
+struct MyApp: BackplaneApplication {
+    typealias RootCommand = Serve
+    static let identifier = "my-app"
+    // No services() — the default returns []; \.notifier and its
+    // \.postgres dependency materialise from the conformances.
+}
+
+struct Serve: PersistentCommand {
+    typealias App = MyApp
+    var requiredServices: ServiceList { [\.notifier] }
+}
+```
+
+**`ServiceList`.** The currency for keypath lists —
+`BackplaneCommand.requiredServices` (previously
+`[PartialKeyPath<Services>]`), `BackplaneService.dependencies`, and
+`EntryDescriptor`'s keypath-flavoured `dependencies:` parameters.
+Built from an array literal (`[\.postgres, \.http]`) or variadically
+(`ServiceList(\.postgres, \.http)`); it exists so the raw
+`PartialKeyPath<Services> & Sendable` composition never appears in a
+consumer-facing signature.
+
+**Replacement strategy is declarative; `.coldRestart` is
+implemented.** `ManagedService` no longer carries a
+`replacementStrategy` instance property — the protocol is back to
+`start()`/`shutdown()`. Strategy is declared on the descriptor
+(`replacement:`, default `.standard` = `.blueGreen(grace: 30s)`), or
+via the `BackplaneService` static, and the graph reads it *before*
+the replacement instance is built — an instance property could only
+be consulted after constructing the very generation whose
+construction it was meant to govern. `.coldRestart`, a stub in 1.x,
+is now real: the old generation is taken out of service and shut
+down (zero grace, bounded by `shutdownTimeout`) *before* the new
+instance is built. `resolve(_:)` returns nil in the gap;
+`requireService(_:timeout:)` waiters park through it; a failure
+while the replacement constructs or starts lands the entry `.failed`
+(recoverable via `recover(at:)`), never `.degraded` — nothing is
+serving, so `.degraded`'s "the old instance keeps serving" contract
+would be a lie. The motivating case: a listener on a fixed port can
+never blue-green — the new generation's `bind(2)` collides with the
+old generation still draining (`EADDRINUSE`).
+
+**Entry-scoped config; multi-instance.** `BackplaneContext.config`
+is now scoped to the entry id — an entry with id `"postgres"` reads
+`postgres.host` as just `"host"`. The new
+`BackplaneContext.rootConfig` is the unscoped escape hatch for
+cross-cutting keys (`logging.level`, feature flags); command-level
+contexts stay root-scoped. Scoping by entry id (not by type) is what
+makes multi-instance work: two keys backed by the same type but
+different ids read two different config scopes.
+
+**`ServiceContext` → `BackplaneContext`.** The factory-context class
+is renamed to end the collision with
+`ServiceContextModule.ServiceContext`, swift-service-context's
+task-local tracing-baggage type — which keeps its name; Backplane's
+1.0 extensions on it are unchanged. Mentions of the SSWG type in
+this document (trace propagation, ambient environment) are *not*
+renamed.
+
+**Deleted surface.**
+
+- `ConfigurationRequirement` (and `EntryDescriptor`'s
+  `configuration:` parameter) — never grew a second behaviour.
+- `ServiceState.configuring` — no flow ever entered it (7 cases remain).
+- `ReplacementStrategy.hotReload` — reload was never strategy-driven;
+  `reload(at:)` dispatches on `HotReloadable` conformance, exactly as
+  before. `HotReloadable.reload()` is now `reload(config:)` — the
+  graph passes the entry-scoped `ConfigReader` (an empty reader when
+  the graph has no config).
+- `ManagedService.replacementStrategy` (instance property) — see above.
+- `postgresEntryDescriptor()` and the deprecated `postgresKey` alias —
+  `BackplanePostgresService` conforms to `BackplaneService`, so naming
+  `\.postgres` in `requiredServices` is the entire registration.
+
+---
+
 ## 1. Positioning
 
 Backplane combines a service-graph subsystem (typed keys, per-entry
-FSM, replacement strategies, subgroups, `ServiceContext`) with a thin
+FSM, replacement strategies, subgroups, `BackplaneContext`) with a thin
 CLI/command-routing layer (`BackplaneApplication`, `BackplaneCommand`,
 `PersistentCommand`, `TaskCommand`, `BootstrapPlan`,
 `BootstrapCoordinator`). Underneath sits
@@ -68,7 +203,7 @@ duplicate command abstraction.
 
 The core model has five concepts: **`ManagedService`** (the lifecycle
 protocol), **`ServiceState`** (the per-entry FSM), **`ServiceGraph`** (the
-registry, an actor), **`ServiceContext`** (the reader), and the
+registry, an actor), **`BackplaneContext`** (the reader), and the
 **keypath-on-`Services`** declaration pattern for typed keys. Underneath
 sits `swift-service-lifecycle`'s `ServiceGroup`, which Backplane
 continues to use as the structured-concurrency substrate. No fork.
@@ -89,10 +224,6 @@ continues to use as the structured-concurrency substrate. No fork.
 public enum ServiceState: Sendable, Hashable {
     /// Entry declared but no usable configuration available.
     case unconfigured
-
-    /// An external flow is gathering configuration for this entry
-    /// (interactive setup, OAuth redirect, etc.).
-    case configuring
 
     /// First instance is constructing; ``ManagedService/start()`` is
     /// running. The entry has no live handle yet.
@@ -146,8 +277,8 @@ public protocol ServiceLifecycleHandle: Sendable {
     func stateStream() -> AsyncStream<ServiceState>
 
     /// Request a restart of this entry from the consumer side.
-    /// Restart strategy is determined by the service's declared
-    /// ``ReplacementStrategy`` (see §7).
+    /// Restart strategy is determined by the entry descriptor's
+    /// declared ``ReplacementStrategy`` (see §7).
     func requestRestart() async
 }
 ```
@@ -162,7 +293,7 @@ replaces it with a concrete lifecycle protocol:
 ///
 /// The graph calls the service's factory closure to construct it, then
 /// ``start()``, then waits for shutdown. Replacement is governed by the
-/// service's ``replacementStrategy`` — see §7.
+/// entry descriptor's declared strategy — see §7.
 ///
 /// Not the same as `ServiceLifecycle.Service`. That protocol's single
 /// `run()` owns its task's lifetime; ``ManagedService`` is two-phase
@@ -170,10 +301,6 @@ replaces it with a concrete lifecycle protocol:
 /// (``ManagedServiceGroupAdapter``) bridges the two when ``ManagedService``
 /// runs inside a ``ServiceGroup``.
 public protocol ManagedService: Sendable {
-    /// How the graph replaces this service when it is restarted or
-    /// reconfigured. See §7.
-    var replacementStrategy: ReplacementStrategy { get }
-
     /// Begin operation. The service is in ``ServiceState/starting``
     /// (or, for blue-green replacement, in a new generation while the
     /// previous generation continues serving) while this method runs.
@@ -188,18 +315,14 @@ public protocol ManagedService: Sendable {
     /// complete in bounded time.
     func shutdown() async
 }
-
-extension ManagedService {
-    /// Default replacement strategy: blue-green with a 30-second grace
-    /// period for the old generation to drain.
-    public var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .seconds(30))
-    }
-}
 ```
 
-Two important things this protocol does *not* require:
+Three important things this protocol does *not* require:
 
+- It does not require a replacement strategy. Since 2.0, strategy is
+  declared per entry — on `EntryDescriptor` (`replacement:`, default
+  `.standard`) or via the `BackplaneService` static (§0.1) — so the
+  graph can read it *before* constructing a replacement instance.
 - It does not require a `reload()` method. Hot reload is a separate,
   opt-in protocol (§7).
 - It does not require any health-check or readiness method. The contract
@@ -288,7 +411,7 @@ replacement machinery.
 ///
 /// Constructed from a list of ``EntryDescriptor``s. After
 /// construction the entry set is fixed for the process lifetime.
-/// Typed keypath resolution lives on ``ServiceContext``; the graph's
+/// Typed keypath resolution lives on ``BackplaneContext``; the graph's
 /// own surface is `ServiceKey<T>`/`String`-addressed.
 public actor ServiceGraph {
     /// Construct the graph from a fixed descriptor set.
@@ -305,6 +428,17 @@ public actor ServiceGraph {
         shutdownTimeout: Duration = .seconds(30),
         subgroupPolicies: [SubgroupTag: SubgroupPolicy] = [:]
     ) throws
+
+    /// Combine explicit descriptors (from `services()`) with defaults
+    /// materialised from ``BackplaneService``-conforming keys, walking
+    /// the transitive closure of `roots` (typically a command's
+    /// `requiredServices`). Explicit descriptors always win over
+    /// defaults for the same id; a walked key with neither throws
+    /// ``ServiceGraphError/unresolvableService``. Added in 2.0 — §0.1.
+    public static func materializedDescriptors(
+        explicit: [EntryDescriptor],
+        roots: ServiceList
+    ) throws -> [EntryDescriptor]
 
     /// Boot the transitive closure of `roots` to terminal-or-running.
     ///
@@ -367,34 +501,52 @@ outer `ServiceGroup` owned by `ApplicationRunner`. Two levels.
 /// Type-erased descriptor of one declared entry. Stored fields are
 /// `package` — consumers construct descriptors via the public
 /// initialisers (identity / `passive:` / `factory:as:`, each in a
-/// bare-key and a keypath flavour).
+/// bare-key and a keypath flavour, plus the closure-free
+/// ``BackplaneService`` forms — see below).
 public struct EntryDescriptor: Sendable {
     /// Entry identity — drives log labels, restart lookup, and the
     /// entry's `ConfigReader` scope.
     package let id: String
 
     /// Factory closure. Called at first boot and at every replacement.
-    /// Receives the entry's ``ServiceContext`` (config travels inside
-    /// it — `context.requireConfig()`).
-    package let factory: @Sendable (ServiceContext) async throws -> any ManagedService
+    /// Receives the entry's ``BackplaneContext`` (config travels inside
+    /// it — `context.requireConfig()`, pre-scoped to the entry id).
+    package let factory: @Sendable (BackplaneContext) async throws -> any ManagedService
 
-    /// How the graph interprets `.unconfigured` for dependent callers.
-    package let configuration: ConfigurationRequirement
+    /// How the graph replaces this entry on ``ServiceGraph/restart(at:)``.
+    /// Read *before* the replacement instance is constructed.
+    /// Defaults to ``ReplacementStrategy/standard``. See §7.
+    package let replacement: ReplacementStrategy
 
     /// Subgroup tag. Defaults to ``SubgroupTag/core``. See §4.
     package let subgroup: SubgroupTag
 
     /// Declared dependencies (other entries this factory will call
-    /// ``ServiceContext/requireService(_:)`` for). Drives pruning and
+    /// ``BackplaneContext/requireService(_:)`` for). Drives pruning and
     /// cycle detection. Optional — services that don't cross-resolve
     /// omit this.
     package let dependencies: [AnyServiceKey]
+
+    /// The keypath forms of ``dependencies``, retained when the
+    /// descriptor was built from keypaths. Drives default
+    /// materialisation (§0.1) — empty for descriptors declared with
+    /// bare ``AnyServiceKey`` dependencies, which must be registered
+    /// explicitly, exactly as in 1.x.
+    package let dependencyKeyPaths: ServiceList
 
     /// Projects the lifecycled managed instance to the key's resolved
     /// value at resolution time (see "Projection" below).
     package let project: @Sendable (any ManagedService) -> any Sendable
 }
 ```
+
+Since 2.0 there are also **closure-free** initialisers for keys whose
+`Value` conforms to `BackplaneService` —
+`EntryDescriptor(\.key, subgroup:…, dependencies:…, replacement:…)` —
+the explicit-override form of the default descriptor the graph would
+materialise on its own. Every parameter left nil falls back to the
+type's static declaration; a supplied `dependencies:` replaces the
+static list (no merge).
 
 **Factory closures persist across restarts.** The closure stored in
 `EntryDescriptor.factory` is captured once at descriptor construction
@@ -408,7 +560,7 @@ itself never re-creates descriptors or swaps closures.
 ```swift
 // Restart-aware factory: rotate through a credential list.
 let credentials = Mutex<[Credential]>(initialCredentials)
-service(\.upstream, label: "upstream") { _, context in
+EntryDescriptor(\.upstream) { _ in
     let cred = credentials.withLock { creds -> Credential in
         let next = creds.removeFirst()
         creds.append(next)
@@ -473,24 +625,35 @@ compile-time guarantee for a boot-time crash. We keep the explicit
 closure: Form 3 is the rare case (most services are Form 1 or Form 2),
 and the one-closure cost buys static conformance checking.
 
-### 2.7 `ServiceContext` — the reader
+### 2.7 `BackplaneContext` — the reader
+
+(Named `ServiceContext` in 1.x; renamed in 2.0 to end the collision
+with swift-service-context's task-local type — §0.1.)
 
 ```swift
 /// Context passed to a service's factory closure, and available at
 /// runtime for cross-service resolution.
-public final class ServiceContext: Sendable {
+public final class BackplaneContext: Sendable {
     /// Entry identifier.
     public let entryID: String
 
     /// Pre-scoped logger.
     public let logger: Logger
 
-    /// Application configuration reader. `nil` when the graph was
-    /// constructed without one (e.g. graph-machinery unit tests);
+    /// Configuration reader **scoped to the entry's id** (2.0 — an
+    /// entry with id "postgres" reads `postgres.host` as `host`; no
+    /// hand-scoping at the call site, and the same type registered
+    /// under two keys reads two config scopes). `nil` when the graph
+    /// was constructed without one (e.g. graph-machinery unit tests);
     /// `requireConfig()` is the throwing non-optional accessor.
-    /// Factories self-scope: `context.requireConfig().scoped(to: "postgres")`.
     public let config: ConfigReader?
     public func requireConfig() throws -> ConfigReader
+
+    /// The application's unscoped reader — the escape hatch for
+    /// cross-cutting keys (`logging.level`, feature flags) outside
+    /// the entry's scope. `nil` exactly when ``config`` is nil.
+    /// Command-level contexts stay root-scoped.
+    public let rootConfig: ConfigReader?
 
     /// Lifecycle handle for this entry.
     public let lifecycle: any ServiceLifecycleHandle
@@ -513,7 +676,7 @@ public final class ServiceContext: Sendable {
 }
 ```
 
-The graph is reachable from a `ServiceContext` via private internals;
+The graph is reachable from a `BackplaneContext` via private internals;
 public consumers go through the typed accessors above. This keeps the
 graph existential off the context's public API.
 
@@ -534,8 +697,10 @@ topological prune. The principle is sound; the mechanism is what changes.
 public protocol BackplaneApplication: Sendable {
     static var identifier: String { get }
 
-    /// Produce the full set of service descriptors the app may need.
-    /// Commands select which subset boots.
+    /// Produce the app's explicit service descriptors. Commands select
+    /// which subset boots. Since 2.0 this defaults to `[]` and is the
+    /// override surface — keys whose `Value` conforms to
+    /// ``BackplaneService`` materialise their own defaults (§0.1).
     static func services() -> [EntryDescriptor]
 
     static func configReader(
@@ -553,12 +718,13 @@ public protocol BackplaneCommand: AsyncParsableCommand {
     associatedtype App: BackplaneApplication
 
     /// Keypaths of required services. The graph is pruned to the
-    /// transitive closure of these entries.
-    var requiredServices: [PartialKeyPath<Services>] { get }
+    /// transitive closure of these entries. `ServiceList` (2.0) is
+    /// array-literal-expressible: `[\.postgres, \.http]`.
+    var requiredServices: ServiceList { get }
 
     var lifecycleMode: ServiceLifecycleMode { get }
 
-    func execute(with context: ServiceContext) async throws
+    func execute(with context: BackplaneContext) async throws
 
     func bootstrap(
         config: ConfigReader,
@@ -580,16 +746,15 @@ struct MyApp: BackplaneApplication {
     static let identifier = "my-app"
 
     static func services() -> [EntryDescriptor] {
-        let services = Services()
-        return [
-            // From BackplanePostgres — ships an EntryDescriptor that
-            // wraps PostgresClient in a BackplanePostgresService
-            // conforming to ManagedService.
-            postgresEntryDescriptor(),
-
+        [
+            // MyHTTPServer takes its dependency as an init parameter,
+            // so its entry stays closure-based. \.postgres needs no
+            // entry at all: BackplanePostgresService conforms to
+            // BackplaneService, so the keypath dependency below
+            // materialises its default descriptor (§0.1).
             EntryDescriptor(
-                services.http,
-                dependencies: [AnyServiceKey(keyPath: \.postgres)]
+                \.http,
+                dependencies: [\.postgres]
             ) { context in
                 let pg = try await context.requireService(\.postgres)
                 return MyHTTPServer(database: pg.client)
@@ -601,16 +766,16 @@ struct MyApp: BackplaneApplication {
 struct ServeCommand: PersistentCommand {
     typealias App = MyApp
     static let configuration = CommandConfiguration(abstract: "Run the server")
-    var requiredServices: [PartialKeyPath<Services>] { [\.http] }
+    var requiredServices: ServiceList { [\.http] }
 }
 ```
 
 Ceremony reduction from the predecessor design: no `ServiceKey`-as-
 protocol-conformer struct, no `ConcreteServiceEntry<K>`, no
 `ServiceValues` accessor. One computed property on `Services`
-returning `ServiceKey<T>`, one `EntryDescriptor` per entry (or a
-shipped descriptor helper like `postgresEntryDescriptor()`), one
-keypath in `requiredServices`.
+returning `ServiceKey<T>`, one `EntryDescriptor` per entry that
+genuinely needs a closure (self-describing `BackplaneService` types
+need none), one keypath in `requiredServices`.
 
 #### Services are managed units, not values
 
@@ -690,7 +855,7 @@ struct AppCommand: AsyncParsableCommand {
 
 struct ServeCommand: PersistentCommand {
     typealias App = MyApp
-    var requiredServices: [PartialKeyPath<Services>] {
+    var requiredServices: ServiceList {
         [\.http, \.metricsExporter]
     }
 }
@@ -698,11 +863,11 @@ struct ServeCommand: PersistentCommand {
 struct MigrateCommand: TaskCommand {
     typealias App = MyApp
     // Migrations need only the database.
-    var requiredServices: [PartialKeyPath<Services>] {
+    var requiredServices: ServiceList {
         [\.database]
     }
 
-    func execute(with context: ServiceContext) async throws {
+    func execute(with context: BackplaneContext) async throws {
         let pg = try await context.requireService(\.database)
         try await runMigrations(on: pg.client)
     }
@@ -712,11 +877,11 @@ struct AdminCommand: TaskCommand {
     typealias App = MyApp
     @Argument var operation: String
 
-    var requiredServices: [PartialKeyPath<Services>] {
+    var requiredServices: ServiceList {
         [\.database, \.adminAPI]
     }
 
-    func execute(with context: ServiceContext) async throws { ... }
+    func execute(with context: BackplaneContext) async throws { ... }
 }
 ```
 
@@ -844,12 +1009,12 @@ are both optional. Small services pay zero ceremony for the feature.
 
 ---
 
-## 5. ServiceContext resolution semantics
+## 5. BackplaneContext resolution semantics
 
 ### Resolution API
 
 ```swift
-extension ServiceContext {
+extension BackplaneContext {
     /// Synchronous resolve. Returns nil only when the entry has never
     /// reached ``.running`` (first boot still in progress, or no
     /// configuration), or has reached a terminal state
@@ -891,7 +1056,7 @@ one specific to first-boot factory cross-resolution):
 
 The the predecessor design `ApplicationRunner` already topologically sorts entries
 via declared dependencies. Backplane keeps that: `EntryDescriptor`
-carries `dependencies: [AnyKeyPath]`, and `ServiceGraph.init` performs a
+carries `dependencies: [AnyServiceKey]`, and `ServiceGraph.init` performs a
 topological sort. A cycle throws `ServiceGraphError.cyclicDependency(path:)`
 at construction — before any service runs.
 
@@ -953,7 +1118,7 @@ Today the service has no way to express this. Backplane adds one.
 
 ### `ServiceHealthReporter`
 
-Each service receives a `ServiceHealthReporter` via its `ServiceContext`.
+Each service receives a `ServiceHealthReporter` via its `BackplaneContext`.
 The reporter affects only the service's own entry — it cannot reach
 siblings.
 
@@ -990,7 +1155,7 @@ public protocol ServiceHealthReporter: Sendable {
     nonisolated func markHealthy()
 }
 
-extension ServiceContext {
+extension BackplaneContext {
     /// Self-report channel for this service.
     public var health: any ServiceHealthReporter { get }
 }
@@ -1001,7 +1166,7 @@ extension ServiceContext {
 ```swift
 final class PostgresService: ManagedService, Sendable {
     let client: PostgresClient
-    let context: ServiceContext
+    let context: BackplaneContext
 
     func start() async throws {
         try await client.run()
@@ -1051,7 +1216,7 @@ The two protocols intentionally do not share a type:
 |                            | `ServiceLifecycleHandle` (consumer) | `ServiceHealthReporter` (service self) |
 |----------------------------|-------------------------------------|----------------------------------------|
 | Direction                  | Read                                | Write                                  |
-| Access                     | Anyone via `ServiceContext.lifecycle` of any entry | Only the entry's own service via `ServiceContext.health` |
+| Access                     | Anyone via `BackplaneContext.lifecycle` of any entry | Only the entry's own service via `BackplaneContext.health` |
 | Methods                    | `state`, `stateStream()`, `requestRestart()` | `markDegraded(fault:)`, `markHealthy()` |
 | Concurrency                | Mixed (sync for `state`/`stateStream` via the per-entry mutex, async for `requestRestart`) | `nonisolated` |
 
@@ -1211,20 +1376,24 @@ according to whatever policy fits. This is deliberately not a
 framework feature — retry policy is an operational concern with too
 many local optima for one default to be right.
 
-As-built, the graph does not escalate on its own: failed replacement
-attempts land the entry in `.degraded` (the old instance keeps
-serving where the strategy allows), and `.degraded` it stays until an
-operator or supervisor acts. `.failed` arises only from a boot-time
-or `recover(at:)` factory/`start()` failure — never from a failed
-replacement. (`ServiceFault` carries a `consecutiveCount` field so a
-threshold-based escalation could be added later without changing the
-surface; the original sketch's automatic `.degraded` → `.failed`
-promotion is unimplemented — see §11.12.) The exit edge from
-`.failed` is the explicit `recover(at:)` (§11.11).
+As-built, the graph does not escalate on its own: failed blue-green
+replacement attempts land the entry in `.degraded` (the old instance
+keeps serving), and `.degraded` it stays until an operator or
+supervisor acts. `.failed` arises from a boot-time or `recover(at:)`
+factory/`start()` failure — and, since 2.0, from a failed
+`.coldRestart` replacement, where the old generation is already gone
+and nothing is serving (§0.1). (`ServiceFault` carries a
+`consecutiveCount` field so a threshold-based escalation could be
+added later without changing the surface; the original sketch's
+automatic `.degraded` → `.failed` promotion is unimplemented — see
+§11.12.) The exit edge from `.failed` is the explicit `recover(at:)`
+(§11.11).
 
 ### The `ReplacementStrategy` enum
 
-Three strategies, declared per service:
+Two strategies, declared per entry — on `EntryDescriptor`
+(`replacement:`) or via the `BackplaneService` static (§0.1) — and
+read from the descriptor *before* the replacement instance is built:
 
 ```swift
 public enum ReplacementStrategy: Sendable {
@@ -1236,31 +1405,35 @@ public enum ReplacementStrategy: Sendable {
     /// externally-stateful services.
     case blueGreen(grace: Duration)
 
-    /// Apply new configuration in place via the ``HotReloadable``
-    /// protocol. No new generation; the existing instance reads
-    /// new settings atomically.
-    ///
-    /// Cheapest. Requires that the service support runtime
-    /// reconfiguration without service-level state change.
-    case hotReload
-
-    /// Tear down the old instance before starting the new one.
+    /// Shut the old instance down before starting the new one
+    /// (zero grace, bounded by the graph's `shutdownTimeout`).
     /// Necessary for services that conflict on resources two
     /// instances can't share — bound TCP ports, exclusive file
     /// locks, single-writer database connections.
     ///
-    /// Callers landing in the gap get nil from ``resolve``; they
-    /// can subscribe to the lifecycle stream to know when the
-    /// new instance arrives.
+    /// Callers landing in the gap get nil from ``resolve``;
+    /// ``requireService(_:timeout:)`` waiters park through it. A
+    /// failure while the replacement constructs or starts lands
+    /// the entry `.failed` (recoverable via ``recover(at:)``),
+    /// never `.degraded` — nothing is serving.
     case coldRestart
+
+    /// The package-wide default: `.blueGreen(grace: .seconds(30))`.
+    public static var standard: ReplacementStrategy { get }
 }
 ```
 
-The default is `.blueGreen` with a 30-second grace, deliberately. The
-overwhelming majority of services *can* tolerate brief coexistence of two
-instances — they don't bind exclusive resources. Defaulting to blue-green
-gives the no-gap property for free; services that genuinely can't coexist
-declare `.coldRestart` explicitly.
+There is no `.hotReload` case (the original sketch had one; 2.0
+deleted it): hot reload was never strategy-driven —
+`ServiceGraph.reload(at:)` dispatches on `HotReloadable` conformance,
+and the strategy only describes what a full replacement looks like.
+
+The default is `.standard` — `.blueGreen` with a 30-second grace —
+deliberately. The overwhelming majority of services *can* tolerate
+brief coexistence of two instances — they don't bind exclusive
+resources. Defaulting to blue-green gives the no-gap property for
+free; services that genuinely can't coexist declare `.coldRestart`
+explicitly.
 
 ### `HotReloadable` — opt-in protocol
 
@@ -1269,34 +1442,31 @@ declare `.coldRestart` explicitly.
 ///
 /// When ``ServiceGraph/reload(at:)`` is called for an entry whose
 /// service conforms to ``HotReloadable``, the graph calls
-/// ``reload()`` instead of starting a new generation. The
-/// service is responsible for atomic application of the new config.
+/// ``reload(config:)`` instead of starting a new generation, passing
+/// the entry-scoped `ConfigReader` — the same reader the factory saw
+/// (an empty reader when the graph has no config). The service is
+/// responsible for atomic application of the new config.
 ///
-/// If ``reload()`` throws, the graph transitions the entry to
+/// If ``reload(config:)`` throws, the graph transitions the entry to
 /// ``ServiceState/degraded`` and leaves the existing instance in
-/// place; escalation to blue-green is the operator's call via
+/// place; escalation to full replacement is the operator's call via
 /// ``ServiceGraph/restart(at:)``.
 ///
-/// Thread safety: ``reload()`` runs while the service is
+/// Thread safety: ``reload(config:)`` runs while the service is
 /// ``.running``. If the service is an actor, the call is actor-isolated.
 /// If the service is a `Sendable` class, the graph serialises the call
-/// through its own actor.
+/// through the detached task that drives it.
 public protocol HotReloadable: ManagedService {
-    func reload() async throws
+    func reload(config: ConfigReader) async throws
 }
 ```
 
-(As-built, `reload()` takes no parameter: services capture their
-config source and re-read it inside `reload()`. The
-`reload(config: ConfigReader)` form sketched originally arrives
-with the production `ConfigReader` integration.)
-
-`HotReloadable` is independent of `ReplacementStrategy`. A service can
-declare both — `replacementStrategy = .hotReload` says "config changes
-prefer hot reload; if reload fails, escalate to blue-green." A service can
-also declare `.hotReload` *without* conforming to `HotReloadable` (this is
-a programmer error; the graph detects and falls back to blue-green with a
-logged warning).
+`HotReloadable` is independent of `ReplacementStrategy`: conformance
+decides whether `reload(at:)` applies config in place, and the
+declared strategy decides what a full replacement looks like when it
+doesn't. Calling `reload(at:)` on a non-conforming service falls back
+to full replacement through the descriptor's declared strategy —
+including `.coldRestart` — with a logged warning (§11.15).
 
 #### What hot-reload is for
 
@@ -1329,20 +1499,21 @@ What is **not** a hot-reload candidate:
 - Anything that resets in-memory state by design (cache invalidation,
   session-table wipe, queue purge).
 
-A service whose configuration change falls in the second list declares
-`.blueGreen` (or `.coldRestart` if it conflicts on resources). The
-choice between `.hotReload` and `.blueGreen` is a real one — the
-service author decides on a per-config-key basis whether the change
-shape fits in-place application.
+A service whose configuration change falls in the second list relies
+on `.blueGreen` replacement (or `.coldRestart` if it conflicts on
+resources). The choice between conforming to `HotReloadable` and
+relying on replacement is a real one — the service author decides on
+a per-config-key basis whether the change shape fits in-place
+application.
 
 ### Choice matrix
 
-| Service shape                          | Strategy        |
+| Service shape                          | Approach        |
 |----------------------------------------|-----------------|
 | Stateless HTTP handler                 | `.blueGreen`    |
 | Database connection pool               | `.blueGreen`    |
-| Service that adjusts a tuning value    | `.hotReload`    |
-| Service holding a logger level         | `.hotReload`    |
+| Service that adjusts a tuning value    | conform to `HotReloadable` |
+| Service holding a logger level         | conform to `HotReloadable` |
 | HTTP server bound to a fixed port      | `.coldRestart` (or `.blueGreen` with `SO_REUSEPORT`) |
 | Singleton with exclusive file lock     | `.coldRestart`  |
 | Migration that mutates schema          | `.coldRestart` (one-shot, not restarted) |
@@ -1434,9 +1605,9 @@ bounded.
 Cold restart is structurally worse for this case. With `.coldRestart`,
 the graph must first call `shutdown()` on the stuck instance and wait
 for it to return before constructing the new one. A wedged `shutdown()`
-blocks the whole restart. The consumer ends up writing a timeout
-supervisor outside the graph to kill the process and let the supervisor
-restart it. Blue-green absorbs that supervisor into the graph.
+stalls the whole restart (as implemented in 2.0, for up to the graph's
+`shutdownTimeout` — bounded, but still a stall blue-green never has).
+Blue-green absorbs that wait into the post-swap drain instead.
 
 ### When blue-green is wrong
 
@@ -1450,8 +1621,8 @@ Two cases where blue-green won't fit naturally:
    cache, an active session table) that should survive the swap. Backplane
    does not provide a state-transfer protocol. Recommendations:
    - Externalise the state (Redis, disk).
-   - Use `.hotReload` if the reconfiguration doesn't require resetting
-     state.
+   - Conform to `HotReloadable` if the reconfiguration doesn't require
+     resetting state.
    - Accept rebuild cost on blue-green swap.
 
    A handoff protocol where v2 reads state from v1 before the swap is
@@ -1589,6 +1760,11 @@ public enum ServiceGraphError: Error, Sendable {
 
     /// `requireConfig()` on a graph constructed without a reader.
     case missingConfigReader(entryID: String)
+
+    /// A required key has no explicit descriptor and its `Value` does
+    /// not conform to `BackplaneService`, so no default can be
+    /// materialised (2.0 — §0.1).
+    case unresolvableService(id: String, valueType: String)
 }
 ```
 
@@ -1629,7 +1805,7 @@ struct App: BackplaneApplication {
 
 struct Serve: PersistentCommand {
     typealias App = App
-    var requiredServices: [PartialKeyPath<Services>] { [\.http] }
+    var requiredServices: ServiceList { [\.http] }
 }
 ```
 
@@ -1658,7 +1834,7 @@ The patterns Acumen needs are all expressible:
   the service's declared strategy (typically blue-green).
 - **Hot config reload** — `ServiceGraph.reload(at:)` for `HotReloadable`
   services.
-- **ServiceReader** — `ServiceContext.service(\.x)` from any context the
+- **ServiceReader** — `BackplaneContext.service(\.x)` from any context the
   framework threads through. Acumen-style "always non-optional" reader is
   a thin wrapper in Acumen's layer over Backplane's optional-returning
   primitive.
@@ -1773,7 +1949,10 @@ factory-time-vs-runtime, replacement-cascade flag.
 
 **Lean:** Start with `[AnyKeyPath]` meaning "required at factory time."
 Add structure when the simple model demonstrably fails — most consumer
-graphs are shallow.
+graphs are shallow. (Changed in 2.0: keypath-declared dependencies are
+now carried as a `ServiceList` alongside the erased keys, because
+default materialisation needs the keypaths — see §0.1. Still no
+optionality or cascade flags.)
 
 ### 11.4 Naming: `ManagedService` vs `Service`
 
@@ -1792,7 +1971,7 @@ manageable.
 ### 11.5 Consumer namespaces beyond `Services`
 
 Backplane ships one namespace (`Services`). The runtime indexes on
-`AnyServiceKey` (a string id), and `ServiceContext` exposes
+`AnyServiceKey` (a string id), and `BackplaneContext` exposes
 keypath overloads typed against `Services`. A consumer that wants a
 parallel namespace (an `Agents` population, an RPC-services
 namespace, etc.) defines its own struct, adds matching
@@ -1997,7 +2176,9 @@ doesn't conform to `HotReloadable`:
 ergonomic intent — admin tooling that fires "reload" at a mixed
 descriptor set shouldn't need per-entry knowledge of which conform to
 `HotReloadable`. The logged warning lets operators detect the
-escalation in production logs.
+escalation in production logs. (Changed in 2.0: the fallback goes
+through the descriptor's *declared* strategy — including
+`.coldRestart` — rather than always blue-green.)
 
 
 ## Summary
@@ -2005,9 +2186,11 @@ escalation in production logs.
 Backplane is a general-purpose service-management library. The core
 surface — `Services` namespace, keypath-addressable `ServiceKey<T>`
 declarations, `ServiceGraph` actor with per-entry FSM,
-`ServiceContext` for cross-service resolution, subgroups with
-configurable policies — accommodates the trivial CLI without
-ceremony and the elaborate framework without contortion.
+`BackplaneContext` for cross-service resolution, subgroups with
+configurable policies, and (since 2.0) self-describing
+`BackplaneService` types that register by being named — accommodates
+the trivial CLI without ceremony and the elaborate framework without
+contortion.
 
 The substantive design choice is to make **blue-green replacement the
 default restart strategy**. By keeping the old generation alive until

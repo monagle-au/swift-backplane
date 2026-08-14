@@ -55,11 +55,18 @@ public enum ServiceGraphError: Error, Sendable {
     /// first observed failure wins.
     case subgroupBootFailed(tag: SubgroupTag, faulted: [String])
 
-    /// ``ServiceContext/requireConfig()`` was called on a context
+    /// ``BackplaneContext/requireConfig()`` was called on a context
     /// whose graph was constructed without a `ConfigReader`. Most
     /// production paths (driven by ``BackplaneApplication``) pass one
     /// through; this surfaces in unit tests where the graph is
     /// constructed directly without config, but a descriptor's
     /// factory unconditionally needs one.
     case missingConfigReader(entryID: String)
+
+    /// A required key has no explicit descriptor and its `Value` does
+    /// not conform to ``BackplaneService``, so no default can be
+    /// materialised. Thrown from
+    /// ``ServiceGraph/materializedDescriptors(explicit:roots:)`` —
+    /// register the key in `services()` or conform the type.
+    case unresolvableService(id: String, valueType: String)
 }

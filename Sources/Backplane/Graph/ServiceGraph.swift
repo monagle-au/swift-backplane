@@ -33,7 +33,7 @@ public actor ServiceGraph {
 
     /// Application configuration reader supplied at graph construction.
     /// `nil` when the graph is built without one (most graph-machinery
-    /// unit tests). Threaded into every minted ``ServiceContext`` so
+    /// unit tests). Threaded into every minted ``BackplaneContext`` so
     /// factories can call `context.config?.scoped(to: "myservice")`.
     private let config: ConfigReader?
 
@@ -67,7 +67,7 @@ public actor ServiceGraph {
     ///   - logger: graph-level logger; `nil` silences graph diagnostics
     ///     (per-entry loggers are always constructed).
     ///   - config: application `ConfigReader` handed to factories via
-    ///     ``ServiceContext/config``; `nil` for graph-machinery tests.
+    ///     ``BackplaneContext/config``; `nil` for graph-machinery tests.
     ///   - shutdownTimeout: bound on a drained generation's
     ///     `shutdown()` before the graph cancels it.
     ///   - subgroupPolicies: per-tag overrides. Tags absent from
@@ -130,6 +130,79 @@ public actor ServiceGraph {
     /// happen — descriptors are immutable. Defensive only.
     private nonisolated func policy(for tag: SubgroupTag) -> SubgroupPolicy {
         resolvedPolicies[tag] ?? .core
+    }
+
+    // MARK: - Default materialisation
+
+    /// Combine explicitly registered descriptors with defaults
+    /// materialised from ``BackplaneService``-conforming keys, walking
+    /// the transitive closure of `roots`.
+    ///
+    /// The environment-model registration entry point: a command's
+    /// `requiredServices` names keys; any key whose `Value` conforms to
+    /// ``BackplaneService`` and has no explicit descriptor contributes
+    /// its ``DefaultEntryProviding/defaultDescriptor``, and its static
+    /// dependencies are walked in turn. Explicit descriptors **always
+    /// win** over defaults for the same id, and the walk continues
+    /// *through* explicit entries' keypath-declared dependencies.
+    ///
+    /// The walk is iterative with a visited set, so a dependency cycle
+    /// terminates here and is then reported precisely (with its path)
+    /// by `ServiceGraph.init`'s cycle detection.
+    ///
+    /// - Parameters:
+    ///   - explicit: descriptors from `services()` — overrides,
+    ///     protocol-key bindings, closure registrations.
+    ///   - roots: the keys to materialise from, typically a command's
+    ///     `requiredServices`. An empty list returns `explicit`
+    ///     unchanged.
+    /// - Throws: ``ServiceGraphError/unresolvableService(id:valueType:)``
+    ///   when a walked key has no explicit descriptor and its `Value`
+    ///   does not conform to ``BackplaneService``.
+    /// - Returns: `explicit` followed by materialised defaults in
+    ///   discovery order.
+    public static func materializedDescriptors(
+        explicit: [EntryDescriptor],
+        roots: ServiceList
+    ) throws -> [EntryDescriptor] {
+        var byID: [String: EntryDescriptor] = [:]
+        for descriptor in explicit {
+            byID[descriptor.id] = descriptor
+        }
+
+        var materialized: [EntryDescriptor] = []
+        var visited = Set<String>()
+        var work = roots.elements
+
+        while let keyPath = work.popLast() {
+            let value = Services()[keyPath: keyPath]
+            guard let convertible = value as? any ServiceKeyConvertible else {
+                fatalError(
+                    "PartialKeyPath<Services> at \(keyPath) does not resolve to a ServiceKey<T>. " +
+                    "Every Services extension property must return ServiceKey<Value>."
+                )
+            }
+            let id = convertible.anyServiceKey.id
+            guard visited.insert(id).inserted else { continue }
+
+            if let existing = byID[id] {
+                // Explicit wins; keep walking its keypath-declared deps
+                // so defaults behind an explicit entry still materialise.
+                work.append(contentsOf: existing.dependencyKeyPaths.elements)
+            } else if let providing = value as? any DefaultEntryProviding {
+                let descriptor = providing.defaultDescriptor
+                byID[id] = descriptor
+                materialized.append(descriptor)
+                work.append(contentsOf: descriptor.dependencyKeyPaths.elements)
+            } else {
+                throw ServiceGraphError.unresolvableService(
+                    id: id,
+                    valueType: String(describing: type(of: value))
+                )
+            }
+        }
+
+        return explicit + materialized
     }
 
     // MARK: - Validation
@@ -272,12 +345,8 @@ public actor ServiceGraph {
     /// means the factory has returned and swapped the active generation;
     /// we hand it back without waiting for `start()` to finish.
     ///
-    /// `.unconfigured` remains a waiting state in the spike. The
-    /// descriptor's ``EntryDescriptor/configuration`` policy is stored
-    /// but has no behavioural effect here *yet* — that gains meaning
-    /// once factory-failure categorisation lands (a future slice that
-    /// lets a factory throw "missing config" and park the entry at
-    /// `.unconfigured` rather than `.failed`).
+    /// `.unconfigured` is a waiting state: boot hasn't reached the
+    /// entry yet, and will shortly.
     private static func awaitHandle<T: Sendable>(
         in entry: ServiceEntry,
         key: ServiceKey<T>
@@ -307,7 +376,7 @@ public actor ServiceGraph {
                 continue
             case .failed, .stopped:
                 throw ServiceGraphError.entryTerminated(id: key.id, state: state)
-            case .unconfigured, .replacing, .configuring:
+            case .unconfigured, .replacing:
                 continue
             }
         }
@@ -359,12 +428,20 @@ public actor ServiceGraph {
 
     // MARK: - Context construction
 
-    /// Build a ``ServiceContext`` for a factory invocation.
+    /// The application reader scoped to an entry id — the reader entry
+    /// factories receive via ``BackplaneContext/config`` and
+    /// ``HotReloadable/reload(config:)`` receives on reload. Nil when
+    /// the graph was constructed without a config.
+    nonisolated private func scopedConfig(for id: String) -> ConfigReader? {
+        config?.scoped(to: ConfigKey(id))
+    }
+
+    /// Build a ``BackplaneContext`` for a factory invocation.
     ///
     /// Called from both ``bootEntry(_:)`` and the restart task. Nonisolated
     /// because it only reads immutable graph state and the entry's own
     /// nonisolated accessors.
-    nonisolated package func makeContext(for entry: ServiceEntry) -> ServiceContext {
+    nonisolated package func makeContext(for entry: ServiceEntry) -> BackplaneContext {
         let entryLogger: Logger
         if var l = logger {
             l[metadataKey: "entry"] = "\(entry.descriptor.id)"
@@ -376,12 +453,17 @@ public actor ServiceGraph {
             entryID: entry.descriptor.id,
             graph: self
         )
-        return ServiceContext(
+        // The context's reader is scoped to the entry id — an entry
+        // "postgres" reads `postgres.host` as `host`, and the same
+        // service type under two keys reads two scopes. The unscoped
+        // reader rides along as `rootConfig`.
+        return BackplaneContext(
             entryID: entry.descriptor.id,
             logger: entryLogger,
             lifecycle: entry.lifecycle(in: self),
             health: reporter,
-            config: config,
+            config: scopedConfig(for: entry.descriptor.id),
+            rootConfig: config,
             graph: self
         )
     }
@@ -416,7 +498,7 @@ public actor ServiceGraph {
     /// **Note on ordering.** Dependencies drive pruning and cycle detection
     /// but do *not* enforce boot ordering. Entries in the closure are
     /// launched concurrently and use
-    /// `ServiceContext.requireService(_:timeout:)` to wait for any
+    /// `BackplaneContext.requireService(_:timeout:)` to wait for any
     /// dependencies their factories actually need. A future slice may
     /// add wave-based parallel ordering as an efficiency.
     public func boot(roots: [AnyServiceKey]? = nil) async throws {
@@ -675,12 +757,27 @@ public actor ServiceGraph {
         entry.transition(to: .running)
     }
 
-    // MARK: - Restart (blue-green)
+    // MARK: - Restart (replacement)
 
     /// Trigger replacement of the entry at `id` using its declared strategy.
     ///
-    /// Currently only `.blueGreen` is implemented; `.hotReload` and
-    /// `.coldRestart` fall through to blue-green with a logged note.
+    /// The strategy comes from the entry's descriptor
+    /// (``EntryDescriptor``'s `replacement:` parameter) — declared at
+    /// registration and read *before* the replacement instance is
+    /// constructed:
+    ///
+    /// - ``ReplacementStrategy/blueGreen(grace:)`` — the new generation
+    ///   is built and started alongside the old; the active pointer
+    ///   swaps on success; the old generation drains for `grace`.
+    ///   Failure leaves the old generation serving and the entry
+    ///   ``ServiceState/degraded(fault:)``.
+    /// - ``ReplacementStrategy/coldRestart`` — the old generation is
+    ///   shut down *first* (zero grace, bounded by the graph's shutdown
+    ///   timeout), then the new instance is built and started. Callers
+    ///   landing in the gap see nil from ``resolve(_:)``;
+    ///   ``requireService(_:timeout:)`` callers wait through it.
+    ///   Failure leaves the entry ``ServiceState/failed(fault:)`` —
+    ///   nothing is serving — recoverable via ``recover(at:)``.
     ///
     /// The method returns immediately after transitioning the entry to
     /// `.replacing` and spawning the replacement task. Observe the
@@ -718,70 +815,147 @@ public actor ServiceGraph {
 
         // Spawn a detached replacement task so the actor is not held during
         // the potentially-slow factory() and start() calls.
-        let task = Task.detached { [logger] in
-            // Phase 1: build new instance.
-            let newInstance: any ManagedService
-            do {
-                newInstance = try await descriptor.factory(context)
-            } catch {
-                entry.transition(to: .degraded(fault: ServiceFault(from: error)))
-                logger?.error("Replacement factory failed for '\(descriptor.id)': \(error)")
-                return
+        let task: Task<Void, Never>
+        switch descriptor.replacement {
+        case .blueGreen(let grace):
+            task = Task.detached { [logger] in
+                await Self.blueGreenReplace(
+                    entry: entry, descriptor: descriptor, context: context,
+                    grace: grace, shutdownTimeout: shutdownTimeout, logger: logger
+                )
             }
-
-            guard !Task.isCancelled else {
-                entry.transition(to: .degraded(fault: ServiceFault(
-                    description: "Replacement cancelled before start",
-                    errorType: "CancellationError",
-                    firstObservedAt: .init()
-                )))
-                return
-            }
-
-            // Phase 2: start the new generation.
-            let newGen = Generation(id: entry.nextGenerationID(), instance: newInstance)
-            do {
-                try await newInstance.start()
-            } catch {
-                // Old generation continues serving.
-                entry.transition(to: .degraded(fault: ServiceFault(from: error)))
-                logger?.error("Replacement start() failed for '\(descriptor.id)': \(error)")
-                return
-            }
-
-            guard !Task.isCancelled else {
-                entry.transition(to: .degraded(fault: ServiceFault(
-                    description: "Replacement cancelled after start",
-                    errorType: "CancellationError",
-                    firstObservedAt: .init()
-                )))
-                return
-            }
-
-            // Phase 3: determine grace from the new instance's strategy.
-            let grace: Duration
-            if case .blueGreen(let g) = newInstance.replacementStrategy {
-                grace = g
-            } else {
-                // .hotReload / .coldRestart not implemented in spike; fall back.
-                grace = .seconds(30)
-                logger?.notice("'\(descriptor.id)' declared \(newInstance.replacementStrategy); spike uses blueGreen fallback.")
-            }
-
-            // Phase 4: atomic swap — new resolves get the new generation.
-            let oldGen = entry.swapActiveGeneration(to: newGen)
-            entry.transition(to: .running)
-            logger?.debug("Blue-green swap completed for '\(descriptor.id)' (gen \(newGen.id))")
-
-            // Phase 5: drain old generation (fire-and-forget from here).
-            guard let oldGen else { return }
-            Task.detached {
-                await ServiceGraph.drain(oldGen, entry: entry, grace: grace, shutdownTimeout: shutdownTimeout, logger: logger)
+        case .coldRestart:
+            task = Task.detached { [logger] in
+                await Self.coldReplace(
+                    entry: entry, descriptor: descriptor, context: context,
+                    shutdownTimeout: shutdownTimeout, logger: logger
+                )
             }
         }
 
         // Cancel any prior in-flight replacement (latest restart wins).
         entry.swapReplacementTask(task)?.cancel()
+    }
+
+    /// Blue-green replacement body. The old generation serves throughout;
+    /// failure at any point leaves it serving and the entry `.degraded`.
+    private static func blueGreenReplace(
+        entry: ServiceEntry,
+        descriptor: EntryDescriptor,
+        context: BackplaneContext,
+        grace: Duration,
+        shutdownTimeout: Duration,
+        logger: Logger?
+    ) async {
+        // Phase 1: build new instance.
+        let newInstance: any ManagedService
+        do {
+            newInstance = try await descriptor.factory(context)
+        } catch {
+            entry.transition(to: .degraded(fault: ServiceFault(from: error)))
+            logger?.error("Replacement factory failed for '\(descriptor.id)': \(error)")
+            return
+        }
+
+        guard !Task.isCancelled else {
+            entry.transition(to: .degraded(fault: ServiceFault(
+                description: "Replacement cancelled before start",
+                errorType: "CancellationError",
+                firstObservedAt: .init()
+            )))
+            return
+        }
+
+        // Phase 2: start the new generation.
+        let newGen = Generation(id: entry.nextGenerationID(), instance: newInstance)
+        do {
+            try await newInstance.start()
+        } catch {
+            // Old generation continues serving.
+            entry.transition(to: .degraded(fault: ServiceFault(from: error)))
+            logger?.error("Replacement start() failed for '\(descriptor.id)': \(error)")
+            return
+        }
+
+        guard !Task.isCancelled else {
+            entry.transition(to: .degraded(fault: ServiceFault(
+                description: "Replacement cancelled after start",
+                errorType: "CancellationError",
+                firstObservedAt: .init()
+            )))
+            return
+        }
+
+        // Phase 3: atomic swap — new resolves get the new generation.
+        let oldGen = entry.swapActiveGeneration(to: newGen)
+        entry.transition(to: .running)
+        logger?.debug("Blue-green swap completed for '\(descriptor.id)' (gen \(newGen.id))")
+
+        // Phase 4: drain old generation (fire-and-forget from here).
+        guard let oldGen else { return }
+        Task.detached {
+            await ServiceGraph.drain(oldGen, entry: entry, grace: grace, shutdownTimeout: shutdownTimeout, logger: logger)
+        }
+    }
+
+    /// Cold-restart replacement body: old-before-new. From the moment the
+    /// active generation is taken, nothing is serving — every failure
+    /// path therefore lands ``ServiceState/failed(fault:)`` (recoverable
+    /// via ``recover(at:)``), never `.degraded`.
+    ///
+    /// Cancellation guards return quietly without a transition: the entry
+    /// is `.replacing` for the whole body, a state from which neither
+    /// `restart(at:)` nor `recover(at:)` will start a competing task, so
+    /// the guards are defensive only.
+    private static func coldReplace(
+        entry: ServiceEntry,
+        descriptor: EntryDescriptor,
+        context: BackplaneContext,
+        shutdownTimeout: Duration,
+        logger: Logger?
+    ) async {
+        // Phase 1: take the active generation out of service and shut it
+        // down before anything new is built — coldRestart exists because
+        // two instances must never coexist.
+        if let oldGen = entry.takeActiveGeneration() {
+            await drain(
+                oldGen, entry: entry, grace: .zero,
+                shutdownTimeout: shutdownTimeout, logger: logger
+            )
+        }
+
+        guard !Task.isCancelled else { return }
+
+        // Phase 2: build the new instance.
+        let newInstance: any ManagedService
+        do {
+            newInstance = try await descriptor.factory(context)
+        } catch {
+            entry.transition(to: .failed(fault: ServiceFault(from: error)))
+            logger?.error("Cold-restart factory failed for '\(descriptor.id)': \(error)")
+            return
+        }
+
+        guard !Task.isCancelled else { return }
+
+        // Phase 3: swap in, then start — swap-before-notify ordering as
+        // in boot, so every observer of `.starting` sees a live handle.
+        let newGen = Generation(id: entry.nextGenerationID(), instance: newInstance)
+        _ = entry.swapActiveGeneration(to: newGen)
+        entry.transition(to: .starting)
+
+        do {
+            try await newInstance.start()
+        } catch {
+            entry.transition(to: .failed(fault: ServiceFault(from: error)))
+            logger?.error("Cold-restart start() failed for '\(descriptor.id)': \(error)")
+            return
+        }
+
+        guard !Task.isCancelled else { return }
+
+        entry.transition(to: .running)
+        logger?.debug("Cold restart completed for '\(descriptor.id)' (gen \(newGen.id))")
     }
 
     // MARK: - Recover (from .failed)
@@ -913,7 +1087,8 @@ public actor ServiceGraph {
     /// Apply new configuration to an entry's live service in place.
     ///
     /// - If the service conforms to ``HotReloadable``, the graph calls
-    ///   ``HotReloadable/reload()`` on the current instance. On success
+    ///   ``HotReloadable/reload(config:)`` on the current instance,
+    ///   passing the entry-scoped reader. On success
     ///   the entry stays `.running` (no new generation). On error the
     ///   entry transitions to ``ServiceState/degraded(fault:)`` — the
     ///   old instance keeps serving; the operator can escalate via
@@ -953,8 +1128,13 @@ public actor ServiceGraph {
             return
         }
 
+        // Hand the service the same entry-scoped reader its factory saw.
+        // A config-less graph passes an empty reader — every key reads
+        // as absent, and the protocol keeps a non-optional signature.
+        let reader = scopedConfig(for: entry.descriptor.id)
+            ?? ConfigReader(provider: InMemoryProvider(values: [:]))
         do {
-            try await reloadable.reload()
+            try await reloadable.reload(config: reader)
             logger?.debug("reload(at:) '\(id)' succeeded; entry stays \(entry.currentState)")
         } catch {
             entry.transition(to: .degraded(fault: ServiceFault(from: error)))

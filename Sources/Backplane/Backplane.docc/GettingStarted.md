@@ -8,20 +8,24 @@ either as an HTTP-style persistent service or as a one-shot task.
 A Backplane app has three ingredients:
 
 1. A type that conforms to ``BackplaneApplication`` and is marked
-   `@main`. It declares an `identifier`, returns the app's service
-   descriptors from `services()`, and names a `RootCommand`.
+   `@main`. It declares an `identifier` and names a `RootCommand`;
+   `services()` defaults to an empty list and is only overridden
+   when you need explicit descriptors.
 2. One or more ``BackplaneCommand`` conformances (typically
    ``PersistentCommand`` or ``TaskCommand``). Each declares the
-   services it needs as keypaths over the ``Services`` namespace,
-   optionally builds a ``BootstrapPlan``, and — for tasks —
-   implements `execute(with:)`.
-3. Typed ``ServiceKey`` declarations on ``Services``, each paired
-   with an ``EntryDescriptor`` whose factory builds the service.
+   services it needs as a ``ServiceList`` of keypaths over the
+   ``Services`` namespace, optionally builds a ``BootstrapPlan``,
+   and — for tasks — implements `execute(with:)`.
+3. Typed ``ServiceKey`` declarations on ``Services``. A key whose
+   value type conforms to ``BackplaneService`` registers itself —
+   naming it in `requiredServices` is all it takes. Other types
+   pair the key with an ``EntryDescriptor`` whose factory closure
+   builds the service.
 
 ## Add the package
 
 ```swift
-.package(url: "https://github.com/<org>/swift-backplane.git", from: "1.0.0"),
+.package(url: "https://github.com/<org>/swift-backplane.git", from: "2.0.0"),
 ```
 
 In the target that depends on it:
@@ -46,10 +50,7 @@ import ServiceLifecycle
 struct MyApp: BackplaneApplication {
     typealias RootCommand = Serve
     static let identifier = "my-app"
-
-    static func services() -> [EntryDescriptor] {
-        []   // No services yet — Serve will run with an empty graph.
-    }
+    // No services() override — the default returns [].
 }
 
 struct Serve: PersistentCommand {
@@ -58,7 +59,7 @@ struct Serve: PersistentCommand {
         abstract: "Run the service forever."
     )
 
-    var requiredServices: [PartialKeyPath<Services>] { [] }
+    var requiredServices: ServiceList { [] }
 }
 ```
 
@@ -122,7 +123,7 @@ Update the command to declare its dependency:
 ```swift
 struct Serve: PersistentCommand {
     typealias App = MyApp
-    var requiredServices: [PartialKeyPath<Services>] { [\.clock] }
+    var requiredServices: ServiceList { [\.clock] }
 }
 ```
 
@@ -134,13 +135,47 @@ stay cold.
 Passive values (a client with no run loop, a shared cache) skip
 the adapter: register them with `EntryDescriptor`'s `passive:`
 initialiser and the graph wraps and unwraps a ``PassiveService``
-for you. See <doc:KeyConcepts> for the three registration forms.
+for you. See <doc:KeyConcepts> for the registration forms.
+
+## Self-describing services
+
+The closure entry above exists because `ClockService` is a plain
+`ServiceLifecycle.Service`. Types you author for Backplane can skip
+`services()` entirely by conforming to ``BackplaneService`` — a
+refinement of ``ManagedService`` that carries its own construction
+recipe and policies as statics:
+
+```swift
+final class Notifier: BackplaneService {
+    static func make(context: BackplaneContext) async throws -> Notifier {
+        // context.config is pre-scoped to the entry id ("notifier").
+        Notifier(webhookURL: try context.requireConfig().requiredString(forKey: "webhookURL"))
+    }
+
+    func start() async throws { /* connect */ }
+    func shutdown() async { /* drain */ }
+}
+
+extension Services {
+    public var notifier: ServiceKey<Notifier> { "notifier" }
+}
+```
+
+Declaring `\.notifier` in a command's `requiredServices` is the
+entire registration — the graph materialises a default
+``EntryDescriptor`` from the conformance, and walks the type's
+static `dependencies` the same way. An explicit descriptor in
+`services()` (for example
+`EntryDescriptor(\.notifier, subgroup: .integrations)`) always
+overrides the materialised default. The stock keys in the satellite
+targets work this way too — `\.postgres` from `BackplanePostgres`
+needs no `services()` entry.
 
 ## Add a task command
 
 Tasks share the same descriptors but exit when their work is done.
 Implement ``TaskCommand`` and supply `execute(with:)` — the
-``ServiceContext`` argument resolves services by keypath:
+``BackplaneContext`` argument resolves services by keypath:
 
 ```swift
 struct PrintHello: TaskCommand {
@@ -150,9 +185,9 @@ struct PrintHello: TaskCommand {
         abstract: "Print a greeting and exit."
     )
 
-    var requiredServices: [PartialKeyPath<Services>] { [] }
+    var requiredServices: ServiceList { [] }
 
-    func execute(with context: ServiceContext) async throws {
+    func execute(with context: BackplaneContext) async throws {
         context.logger.info("Hello from \(MyApp.identifier).")
     }
 }
@@ -189,7 +224,7 @@ struct Serve: PersistentCommand {
     typealias App = MyApp
     @OptionGroup var logging: LoggingOptions
 
-    var requiredServices: [PartialKeyPath<Services>] { [\.clock] }
+    var requiredServices: ServiceList { [\.clock] }
 
     func bootstrap(config: ConfigReader, environment: Environment) async throws -> BootstrapPlan {
         var plan = BootstrapPlan()

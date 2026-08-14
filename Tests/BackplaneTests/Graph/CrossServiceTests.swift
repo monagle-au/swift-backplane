@@ -2,7 +2,7 @@
 //  CrossServiceTests.swift
 //  swift-backplane
 //
-//  Tests for cross-service resolution via ServiceContext in the
+//  Tests for cross-service resolution via BackplaneContext in the
 //  ServiceGraph spike.
 //
 
@@ -18,10 +18,6 @@ import Testing
 final class IdentityService: ManagedService, @unchecked Sendable {
     let instanceID = UUID()
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     func start() async throws { }
     func shutdown() async { }
 }
@@ -31,10 +27,6 @@ final class IdentityService: ManagedService, @unchecked Sendable {
 final class SlowStartService: ManagedService, @unchecked Sendable {
     let instanceID = UUID()
     let startDelay: Duration
-
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
 
     init(startDelay: Duration) { self.startDelay = startDelay }
 
@@ -54,10 +46,6 @@ final class ResolvingService<Resolved: ManagedService>: ManagedService, @uncheck
     let factoryStartedAt: Date
     let resolvedReturnedAt: Date
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     init(resolved: Resolved, factoryStartedAt: Date, resolvedReturnedAt: Date) {
         self.resolved = resolved
         self.factoryStartedAt = factoryStartedAt
@@ -68,17 +56,13 @@ final class ResolvingService<Resolved: ManagedService>: ManagedService, @uncheck
     func shutdown() async { }
 }
 
-/// A service whose factory captures its `ServiceContext`, exposing it
+/// A service whose factory captures its `BackplaneContext`, exposing it
 /// for the test to use after boot. Allows the test to call `.service(_:)`
 /// from a real context (rather than constructing one inline).
 final class TapService: ManagedService, @unchecked Sendable {
-    let context: ServiceContext
+    let context: BackplaneContext
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
-    init(context: ServiceContext) { self.context = context }
+    init(context: BackplaneContext) { self.context = context }
 
     func start() async throws { }
     func shutdown() async { }
@@ -114,10 +98,6 @@ final class MaybeBlockingService: ManagedService, @unchecked Sendable {
     let instanceID = UUID()
     let gate: StartGate?
 
-    nonisolated var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .milliseconds(50))
-    }
-
     init(gate: StartGate? = nil) { self.gate = gate }
 
     func start() async throws {
@@ -128,7 +108,7 @@ final class MaybeBlockingService: ManagedService, @unchecked Sendable {
 }
 
 /// A null lifecycle handle for tests that need to construct a
-/// ``ServiceContext`` inline without referencing a specific entry.
+/// ``BackplaneContext`` inline without referencing a specific entry.
 struct NullLifecycleHandle: ServiceLifecycleHandle {
     var state: ServiceState { .unconfigured }
     func stateStream() -> AsyncStream<ServiceState> { AsyncStream { $0.finish() } }
@@ -136,7 +116,7 @@ struct NullLifecycleHandle: ServiceLifecycleHandle {
 }
 
 /// Companion to ``NullLifecycleHandle`` for tests that construct a
-/// ``ServiceContext`` inline without a real entry.
+/// ``BackplaneContext`` inline without a real entry.
 struct NullHealthReporter: ServiceHealthReporter {
     func markDegraded(fault: ServiceFault) { }
     func markHealthy() { }
@@ -252,7 +232,7 @@ struct CrossServiceTests {
 
     // MARK: Test 3 — sync resolve returns nil before boot
 
-    /// Pre-boot: `graph.resolve(_:)` and a fresh `ServiceContext.service(_:)`
+    /// Pre-boot: `graph.resolve(_:)` and a fresh `BackplaneContext.service(_:)`
     /// both return nil. Post-boot: both return the live instance.
     @Test("synchronous service(_:) returns nil before boot, live instance after")
     func testSynchronousServiceReturnsNilBeforeBoot() async throws {
@@ -268,7 +248,7 @@ struct CrossServiceTests {
         // Construct a context inline using the package init. The
         // lifecycle handle is irrelevant for this test — only the graph
         // reference matters for forwarding `service(_:)`.
-        let context = ServiceContext(
+        let context = BackplaneContext(
             entryID: "test-driver",
             logger: Logger(label: "test"),
             lifecycle: NullLifecycleHandle(),
@@ -397,7 +377,7 @@ struct CrossServiceTests {
     /// During a blue-green replacement, `context.service(\.a)` returns
     /// the *old* generation. After the swap, it returns the new one.
     /// This validates that the no-gap property holds at the
-    /// `ServiceContext` resolution layer.
+    /// `BackplaneContext` resolution layer.
     @Test("service(_:) returns old generation during .replacing; new generation after swap")
     func testServiceResolvesOldGenerationDuringReplacement() async throws {
         let keyA = ServiceKey<MaybeBlockingService>(id: "a")
@@ -408,13 +388,13 @@ struct CrossServiceTests {
         let restartGate = StartGate()
         let callCount = Mutex<Int>(0)
 
-        let aFactory: @Sendable (ServiceContext) async throws -> MaybeBlockingService = { _ in
+        let aFactory: @Sendable (BackplaneContext) async throws -> MaybeBlockingService = { _ in
             let n = callCount.withLock { c -> Int in c += 1; return c }
             return MaybeBlockingService(gate: n == 1 ? nil : restartGate)
         }
 
         let graph = try ServiceGraph(descriptors: [
-            EntryDescriptor(keyA, subgroup: .integrations, factory: aFactory),
+            EntryDescriptor(keyA, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50)), factory: aFactory),
             EntryDescriptor(keyTap) { ctx in TapService(context: ctx) },
         ])
 

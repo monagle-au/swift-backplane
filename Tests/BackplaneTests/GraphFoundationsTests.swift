@@ -32,11 +32,11 @@ struct GraphFoundationsTests {
             firstObservedAt: Date(timeIntervalSince1970: 0)
         )
         let states: Set<ServiceState> = [
-            .unconfigured, .configuring, .starting, .running,
+            .unconfigured, .starting, .running,
             .degraded(fault: fault), .replacing, .stopped,
             .failed(fault: fault),
         ]
-        #expect(states.count == 8)
+        #expect(states.count == 7)
     }
 
     // MARK: - ServiceFault

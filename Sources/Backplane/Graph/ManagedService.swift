@@ -13,11 +13,11 @@
 /// owns its task's lifetime. ``ManagedService`` uses a two-phase
 /// (`start` / `shutdown`) contract; the graph owns the lifetime envelope and
 /// drives an internal per-entry adapter that bridges the two.
+///
+/// Replacement strategy is not part of this protocol — it is declared
+/// per entry on ``EntryDescriptor`` (`replacement:`), or via
+/// ``BackplaneService/replacementStrategy`` for self-describing types.
 public protocol ManagedService: Sendable {
-    /// How the graph replaces this service. Defaults to
-    /// `.blueGreen(grace: 30s)`.
-    var replacementStrategy: ReplacementStrategy { get }
-
     /// Begin operation. Return when the service is ready to handle requests.
     ///
     /// A throw transitions this generation to a failed state; the active
@@ -30,10 +30,4 @@ public protocol ManagedService: Sendable {
     /// drained. Must complete in bounded time; the graph cancels the task
     /// after the configured shutdown timeout.
     func shutdown() async
-}
-
-extension ManagedService {
-    public var replacementStrategy: ReplacementStrategy {
-        .blueGreen(grace: .seconds(30))
-    }
 }

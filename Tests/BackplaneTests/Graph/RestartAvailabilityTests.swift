@@ -70,7 +70,7 @@ struct RestartAvailabilityTests {
     func concurrentResolvesNeverNil() async throws {
         let key = ServiceKey<TrackableService>(id: "svc")
         let graph = try ServiceGraph(descriptors: [
-            EntryDescriptor(key, subgroup: .integrations) { _ in TrackableService() },
+            EntryDescriptor(key, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50))) { _ in TrackableService() },
         ])
         try await graph.boot()
 
@@ -114,7 +114,7 @@ struct RestartAvailabilityTests {
         let replacementGate = StartGate()
 
         let graph = try ServiceGraph(descriptors: [
-            EntryDescriptor(key, subgroup: .integrations) { _ in
+            EntryDescriptor(key, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50))) { _ in
                 let n = factoryCalls.increment()
                 return n == 1
                     ? MaybeBlockingService(gate: nil)
@@ -169,7 +169,7 @@ struct RestartAvailabilityTests {
     func requireServiceWaitersDuringRestart() async throws {
         let key = ServiceKey<TrackableService>(id: "svc")
         let graph = try ServiceGraph(descriptors: [
-            EntryDescriptor(key, subgroup: .integrations) { _ in TrackableService() },
+            EntryDescriptor(key, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50))) { _ in TrackableService() },
         ])
         try await graph.boot()
 
@@ -205,7 +205,7 @@ struct RestartAvailabilityTests {
         let factoryCalls = SyncCounter()
 
         let graph = try ServiceGraph(descriptors: [
-            EntryDescriptor(key, subgroup: .integrations) { _ in
+            EntryDescriptor(key, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50))) { _ in
                 _ = factoryCalls.increment()
                 return TrackableService()
             },
@@ -241,7 +241,7 @@ struct RestartAvailabilityTests {
     func stateStreamEmitsReplacing() async throws {
         let key = ServiceKey<TrackableService>(id: "svc")
         let graph = try ServiceGraph(descriptors: [
-            EntryDescriptor(key, subgroup: .integrations) { _ in TrackableService() },
+            EntryDescriptor(key, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50))) { _ in TrackableService() },
         ])
         try await graph.boot()
 
@@ -277,7 +277,7 @@ struct RestartAvailabilityTests {
     func parallelMultiEntryRestart() async throws {
         let keys = (0..<5).map { ServiceKey<TrackableService>(id: "svc\($0)") }
         let descriptors = keys.map { key in
-            EntryDescriptor(key, subgroup: .integrations) { _ in TrackableService() }
+            EntryDescriptor(key, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50))) { _ in TrackableService() }
         }
         let graph = try ServiceGraph(descriptors: descriptors)
         try await graph.boot()
@@ -325,7 +325,7 @@ struct RestartAvailabilityTests {
 
         let graph = try ServiceGraph(
             descriptors: [
-                EntryDescriptor(key, subgroup: .integrations) { _ in
+                EntryDescriptor(key, subgroup: .integrations, replacement: .blueGreen(grace: .milliseconds(50))) { _ in
                     let n = callCount.increment()
                     return n == 1 ? firstService : StuckShutdownService()
                 },
