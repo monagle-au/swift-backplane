@@ -8,6 +8,17 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- `ServiceGraph.drain` no longer logs "Shutdown timed out" when
+  `shutdown()` completed inside its budget. The timeout task slept with
+  `try?`, which swallowed its own cancellation, so cancelling it on the
+  happy path fell through to cancel an already-finished task and emit the
+  warning — on **every** successful drain, immediately under
+  `.coldRestart` and about one grace period later under blue-green. The
+  warning is the only signal a genuinely leaked generation gives, so
+  emitting it on the happy path trained readers to ignore the real one.
+
 ## [2.0.0] — 2026-08-05
 
 Environment-model registration. Services describe themselves — a type
