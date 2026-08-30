@@ -1177,7 +1177,14 @@ public actor ServiceGraph {
             await generation.instance.shutdown()
         }
         let timeoutTask = Task {
-            try? await Task.sleep(for: shutdownTimeout, clock: .continuous)
+            do {
+                try await Task.sleep(for: shutdownTimeout, clock: .continuous)
+            } catch {
+                // Cancelled because shutdown() finished inside the budget.
+                // Falling through here would cancel an already-completed
+                // task and log a timeout that did not happen.
+                return
+            }
             shutdownTask.cancel()
             logger?.warning("Shutdown timed out for gen \(generation.id) of '\(entry.descriptor.id)'; cancelling task.")
         }
