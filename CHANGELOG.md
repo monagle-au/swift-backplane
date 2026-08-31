@@ -10,6 +10,14 @@ from `1.0.0` onwards.
 
 ### Fixed
 
+- `ApplicationRunner` now registers `SIGTERM`/`SIGINT` as graceful-shutdown
+  signals on the outer `ServiceGroup`. Previously no signals were registered
+  anywhere, so a Backplane application never drained on `SIGTERM` — container
+  platforms would wait out their grace period and `SIGKILL` the process — and
+  any service library that installed its own handlers (e.g. an HTTP server's
+  `runService()` convenience) captured the signal at the wrong layer, leaving
+  the graph running. Signals now drain the graph top-down in dependency order.
+
 - `ServiceGraph.drain` no longer logs "Shutdown timed out" when
   `shutdown()` completed inside its budget. The timeout task slept with
   `try?`, which swallowed its own cancellation, so cancelling it on the
