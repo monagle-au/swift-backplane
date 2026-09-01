@@ -8,6 +8,8 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+## [2.0.1] — 2026-09-01
+
 ### Fixed
 
 - `ApplicationRunner` now registers `SIGTERM`/`SIGINT` as graceful-shutdown
@@ -465,7 +467,9 @@ follow strict SemVer.
 - Swift 6.2+
 - macOS 15+
 
-[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/monagle-au/swift-backplane/compare/v2.0.0...v2.0.1
+[2.0.0]: https://github.com/monagle-au/swift-backplane/compare/v1.3.1...v2.0.0
 [1.3.1]: https://github.com/monagle-au/swift-backplane/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/monagle-au/swift-backplane/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/monagle-au/swift-backplane/compare/v1.1.1...v1.2.0
