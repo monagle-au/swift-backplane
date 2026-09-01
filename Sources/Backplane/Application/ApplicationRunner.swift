@@ -6,6 +6,7 @@
 import Configuration
 import Logging
 import ServiceLifecycle
+import UnixSignals
 
 /// Internal orchestrator that boots a ``ServiceGraph`` and drives the
 /// outer `ServiceGroup`.
@@ -92,10 +93,19 @@ struct ApplicationRunner: Sendable {
 
         let groupConfig = ServiceGroupConfiguration(
             services: serviceConfigs,
+            gracefulShutdownSignals: Self.gracefulShutdownSignals,
             logger: logger
         )
         try await ServiceGroup(configuration: groupConfig).run()
     }
+
+    /// Signals that gracefully drain the outer group — and with it the
+    /// graph's entries, in dependency order. Registered here, on the
+    /// top-level group, because signal handling belongs to the process
+    /// owner: a service library that installs its own handlers (e.g. an
+    /// HTTP server's `runService()` convenience) captures the signal at
+    /// the wrong layer and the rest of the graph never drains.
+    static let gracefulShutdownSignals: [UnixSignal] = [.sigterm, .sigint]
 
     /// Construct a command-scoped ``BackplaneContext`` for passing to a
     /// task command's `execute(with:)`. The lifecycle/health surfaces

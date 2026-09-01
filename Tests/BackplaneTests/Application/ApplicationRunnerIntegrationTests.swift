@@ -323,3 +323,20 @@ struct ApplicationRunnerIntegrationTests {
         }
     }
 }
+
+// MARK: - Signal registration
+
+@Suite("Graceful shutdown signals")
+struct GracefulShutdownSignalTests {
+    /// The outer ServiceGroup must register SIGTERM/SIGINT — signal
+    /// handling belongs to the process owner, not to any service
+    /// library inside the graph. Without this, a backplane app never
+    /// drains on SIGTERM (container platforms then SIGKILL it), and any
+    /// inner library that registers its own handlers captures the
+    /// signal at the wrong layer.
+    @Test("ApplicationRunner registers SIGTERM and SIGINT on the outer group")
+    func outerGroupSignals() {
+        #expect(ApplicationRunner.gracefulShutdownSignals.contains(.sigterm))
+        #expect(ApplicationRunner.gracefulShutdownSignals.contains(.sigint))
+    }
+}
