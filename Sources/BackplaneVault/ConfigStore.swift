@@ -223,6 +223,29 @@ public struct ConfigStore: Sendable {
         ConfigStore(backend: backend, scopePrefix: scopePrefix + [scope])
     }
 
+    /// The keys this store holds that begin with `prefix`, in sorted order.
+    ///
+    /// Returned in **this store's** namespace, so a returned key can be passed
+    /// straight back to ``set(_:forKey:)-(String,_)`` or ``remove(key:)``. A
+    /// scoped store therefore strips its own scope: a caller that asked for
+    /// `"device."` gets `"device.one.name"`, never `"shelly.device.one.name"`.
+    ///
+    /// Exists so callers do not have to keep a parallel index of what they have
+    /// written. An index has to be updated in step with the data, and the
+    /// update that lands second is the one that can be lost — leaving records
+    /// on disk that nothing can enumerate. Reading the keys makes the listing
+    /// follow the data instead.
+    ///
+    /// Reads this store's view of the file, the same view ``reader`` serves, so
+    /// a write from another process is visible after ``reload()`` rather than
+    /// immediately.
+    public func keys(withPrefix prefix: String) async -> [String] {
+        let searchPrefix = prefixedKey(prefix)
+        let scopeLength = scopePrefix.isEmpty ? 0 : scopePrefix.joined(separator: ".").count + 1
+        return await backend.keys(matching: searchPrefix)
+            .map { String($0.dropFirst(scopeLength)) }
+    }
+
     // MARK: - Info
 
     /// The file path of the backing JSON file.
@@ -251,6 +274,15 @@ public struct ConfigStore: Sendable {
 /// because every write merges into a fresh read of the file rather than
 /// rewriting from this backend's snapshot.
 public actor ConfigStoreBackend {
+
+    /// Keys in the current file view that begin with `fullPrefix`, sorted.
+    ///
+    /// Sorted so the listing is a stable value: an unordered result makes
+    /// "did the set of records change?" a question a caller cannot answer by
+    /// comparison.
+    func keys(matching fullPrefix: String) -> [String] {
+        currentValues.keys.filter { $0.hasPrefix(fullPrefix) }.sorted()
+    }
     let filePath: String
     let scope: String
     let encryption: any ConfigEncryption
