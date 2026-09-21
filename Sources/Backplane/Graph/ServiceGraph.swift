@@ -508,6 +508,49 @@ public actor ServiceGraph {
         }
     }
 
+    /// Run every entry's factory, but not its `start()`, leaving each in
+    /// ``ServiceState/starting`` with a live instance already resolvable.
+    ///
+    /// The eager half of the composed mode. ``boot(roots:)`` awaits
+    /// `start()` before an entry reaches ``ServiceState/running``, which
+    /// makes the caller wait on whatever that service does to reach its
+    /// dependency — for an integration talking to hardware over a network,
+    /// an unbounded wait on something that may simply be unplugged. This
+    /// returns as soon as the instances exist, so a caller that needs to
+    /// enumerate or resolve them can do so immediately, and ``run()``'s
+    /// per-entry adapters drive `start()` afterwards inside the inner
+    /// `ServiceGroup` — concurrently with whatever else the outer group is
+    /// running.
+    ///
+    /// Resolution works during `.starting`: ``resolve(_:)`` is backed by a
+    /// state filter that admits `.starting`, `.running`, `.degraded` and
+    /// `.replacing` (see `ServiceEntry.currentHandle(_:)`), so a
+    /// factory-only boot is enough for consumers that need the instance
+    /// rather than a started one.
+    ///
+    /// Failure semantics are unchanged: a factory throw transitions that
+    /// entry to ``ServiceState/failed`` and the subgroup's
+    /// `failFast`/`degraded` policy applies exactly as it does under
+    /// ``boot(roots:)``. What *does* change is where a `start()` failure
+    /// surfaces — in the adapter, as that entry's `run()` throwing into the
+    /// inner group, rather than here.
+    ///
+    /// Also records `roots` as the pending boot set, so the later ``run()``
+    /// cannot disagree with this call about which entries participate.
+    ///
+    /// - Parameter roots: as ``boot(roots:)`` — `nil` boots every
+    ///   registered entry, non-nil prunes to the transitive closure.
+    /// - Throws: ``ServiceGraphError/unknownRoot(id:)`` for an unregistered
+    ///   id, or ``ServiceGraphError/subgroupBootFailed(tag:faulted:)`` if a
+    ///   `failFast` subgroup's factories failed.
+    public func bootFactories(roots: [AnyServiceKey]? = nil) async throws {
+        let bootSet = try resolveBootSet(roots: roots)
+        pendingBootRoots = roots
+        try await bootPartitioned(bootSet: bootSet) { entry in
+            await self.bootPhase1Entry(entry)
+        }
+    }
+
     /// Configure the roots that ``run()`` should boot when the graph is
     /// supervised inside an outer `ServiceGroup`. Call before adding
     /// the graph to the group. `nil` (the default) means "boot every
@@ -803,6 +846,45 @@ public actor ServiceGraph {
         switch entry.currentState {
         case .running, .degraded:
             break
+
+        case .starting:
+            // The entry is still coming up, so there is nothing to replace
+            // yet — but dropping the request is worse than waiting for one.
+            // A restart is how a configuration write reaches a running
+            // service, and the window where an entry sits in `.starting`
+            // is precisely the window where the config is most likely to be
+            // wrong: a service that cannot reach its dependency takes a
+            // long time to start, and "fix the address and restart" is the
+            // operator's response to exactly that. Dropped, the entry comes
+            // up on the configuration it started with and nothing retries.
+            //
+            // Deferring is done by watching this entry's own state stream
+            // rather than by a queue the graph has to reconcile: one task,
+            // self-cancelling, and it cannot leak a request against an
+            // entry that never comes up.
+            logger?.info(
+                "restart(at:) deferred — '\(id)' is still starting; it will be applied once running"
+            )
+            Task { [weak self] in
+                for await state in entry.stateStream() {
+                    switch state {
+                    case .starting, .replacing:
+                        continue    // still settling; keep waiting
+                    case .running, .degraded:
+                        await self?.restart(at: id)
+                        return
+                    case .unconfigured, .stopped, .failed:
+                        // It never came up. A restart would be replacing
+                        // nothing; `recover(at:)` owns the `.failed` path.
+                        self?.logger?.info(
+                            "Deferred restart for '\(id)' dropped — entry settled in \(state)"
+                        )
+                        return
+                    }
+                }
+            }
+            return
+
         default:
             logger?.warning("restart(at:) ignored for '\(id)' in state \(entry.currentState)")
             return
@@ -1228,8 +1310,9 @@ extension ServiceGraph: ServiceLifecycle.Service {
     /// a surprise and should drain the rest. (Real completion modes
     /// from the design note's §4 land in a future slice.)
     ///
-    /// **Relationship with ``boot(roots:)``.** This method does not
-    /// call ``boot(roots:)``. They are two operational modes:
+    /// **Relationship with ``boot(roots:)`` and ``bootFactories(roots:)``.**
+    /// This method does not call ``boot(roots:)``. There are two
+    /// operational modes:
     /// - Standalone: callers invoke ``boot(roots:)`` and then use
     ///   ``resolve(_:)``/``requireService(_:timeout:)`` — single-phase
     ///   boot, no inner `ServiceGroup`. This is what the existing
@@ -1237,7 +1320,25 @@ extension ServiceGraph: ServiceLifecycle.Service {
     /// - Composed: callers put the graph inside an outer
     ///   `ServiceGroup` and invoke `run()` — two-phase boot, the
     ///   adapter drives `start()`/`shutdown()`.
-    /// Mixing the two within one graph lifetime is undefined.
+    ///
+    /// **Pre-booting factories is part of the composed mode, not a mixing
+    /// of the two.** A composed caller that needs to enumerate or resolve
+    /// instances *before* the outer group starts — to build something from
+    /// them, or to register their admin surfaces — calls
+    /// ``bootFactories(roots:)`` first and then adds the graph to the
+    /// group as usual. Phase 1 here is idempotent against that
+    /// (``bootPhase1Entry(_:)`` guards on `.unconfigured`), and phase 2
+    /// selects entries in `.starting`, which is exactly where
+    /// ``bootFactories(roots:)`` leaves them, so every entry still gets an
+    /// adapter. ``bootFactories(roots:)`` records its `roots` as the
+    /// pending boot set so the two passes cannot disagree.
+    ///
+    /// What genuinely does not mix is single-phase ``boot(roots:)``
+    /// followed by `run()`: `bootEntry` drives entries past `.starting` to
+    /// `.running`, phase 2's selection then matches nothing, **no adapter
+    /// is built for them, and `shutdown()` is consequently never called on
+    /// any of them**. If a caller wants the graph supervised, the eager
+    /// call must be ``bootFactories(roots:)``.
     public func run() async throws {
         // Phase 1: factories run; active generations are swapped. The
         // boot set respects ``setBootRoots(_:)`` so a command's
