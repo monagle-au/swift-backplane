@@ -8,6 +8,81 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-09-21
+
+### Added
+
+- `ServiceGraph(gracefulShutdownTimeout:)` — caps how long `run()`'s inner
+  `ServiceGroup` waits for every adapter's graceful shutdown before
+  cancelling them. Defaults to `nil` (no cap), matching `ServiceLifecycle`'s
+  own default, so existing behaviour is unchanged. Worth setting whenever
+  entries do real I/O in `shutdown()` — closing a socket, sending a
+  protocol-level disconnect — because a teardown that waits on something far
+  away otherwise stalls the inner group with only the *outer* group's hard
+  cancellation as a backstop, which defeats shutting down gracefully at all.
+  Set it below the outer group's own cap: whichever fires first wins.
+
+- `ServiceGraph.bootFactories(roots:)` — runs every entry's factory but not
+  its `start()`, leaving each in `.starting` with a live instance already
+  resolvable. The eager half of the composed mode: a caller that needs to
+  enumerate or resolve instances before the outer `ServiceGroup` starts can
+  now do so without waiting on `start()`. `boot(roots:)` awaits `start()`
+  before an entry reaches `.running`, which makes the caller wait on
+  whatever that service does to reach its dependency — for an integration
+  talking to hardware over a network, an unbounded wait on something that
+  may simply be unplugged. Records its `roots` as the pending boot set so a
+  later `run()` cannot disagree about which entries participate.
+
+### Fixed
+
+- `ServiceGraphEntryAdapter` no longer reports a start cancelled by shutdown
+  as a fault. Cancellation arriving mid-`start()` means the group is
+  draining, not that the service failed; transitioning to `.failed` invites
+  a recovery supervisor to build a fresh instance *while the process is
+  shutting down*, unsupervised and built to be abandoned. The entry now
+  stops — and still gets `shutdown()`, so a half-open connection is closed.
+
+- `ServiceGraphEntryAdapter` now shuts down the generation that is actually
+  serving, rather than the one it captured when `start()` ran. `restart(at:)`
+  and `recover(at:)` build a new generation and start it inline without an
+  adapter, so after any hot restart the entry serves an instance the adapter
+  task has never seen. It was closing an already-drained generation while
+  the live one kept its connection for the life of the process — and for an
+  entry whose `shutdown()` releases shared claims, releasing them out from
+  under the generation still using them.
+
+- `restart(at:)` no longer discards a request that arrives while an entry is
+  `.starting`. That window is precisely when a restart is most likely to be
+  needed: a service that cannot reach its dependency takes a long time to
+  start, and "fix the address and restart" is the operator's response to
+  exactly that. The request is now applied once the entry is running, and
+  dropped only if it settles somewhere a restart cannot act on.
+
+### Documentation
+
+- `run()`'s "mixing the two modes is undefined" note now distinguishes
+  pre-booting factories (part of the composed mode) from single-phase
+  `boot()` followed by `run()` (genuinely unsupported — `bootEntry` drives
+  entries past `.starting`, phase 2 then matches nothing, no adapter is
+  built, and **`shutdown()` is consequently never called on any of them**).
+
+## [2.1.0] — 2026-09-19
+
+Back-filled: this release was tagged without a changelog entry.
+
+### Added
+
+- `ConfigStore.keys(withPrefix:)` — lists the keys a store holds, so callers
+  that need to know *which* records exist no longer have to maintain a
+  second index alongside the records. Both Acumen integrations that did so
+  wrote the record's fields first and the index entry last, meaning a throw
+  or a crash in between left data on disk that nothing could enumerate.
+  Prefixed rather than a bare `keys()`: a store holds an agent's whole
+  configuration, not just its records, and enumerating records should not
+  sweep up a bridge IP or an app key. Keys come back in the calling store's
+  own namespace, so a returned key can be passed straight back to `set` or
+  `remove`.
+
 ## [2.0.1] — 2026-09-01
 
 ### Fixed
@@ -467,7 +542,9 @@ follow strict SemVer.
 - Swift 6.2+
 - macOS 15+
 
-[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/monagle-au/swift-backplane/compare/v2.1.0...v2.2.0
+[2.1.0]: https://github.com/monagle-au/swift-backplane/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/monagle-au/swift-backplane/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/monagle-au/swift-backplane/compare/v1.3.1...v2.0.0
 [1.3.1]: https://github.com/monagle-au/swift-backplane/compare/v1.3.0...v1.3.1

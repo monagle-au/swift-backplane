@@ -46,6 +46,21 @@ package struct ServiceGraphEntryAdapter: ServiceLifecycle.Service {
         // Phase 2a: start().
         do {
             try await instance.start()
+        } catch is CancellationError {
+            // Shutdown arrived mid-start. This is a stop, not a fault: the
+            // group is draining and this entry simply never opened. Marking
+            // it `.failed` would be actively harmful, because a recovery
+            // supervisor watching for `.failed` would schedule a fresh
+            // factory + start() *while the process is shutting down* — an
+            // instance nobody supervises, built to be abandoned. Fall
+            // through to the same shutdown sequence a started service gets,
+            // so a half-open connection is still closed.
+            logger?.debug(
+                "Adapter: '\(entry.descriptor.id)' cancelled during start() — stopping"
+            )
+            await instance.shutdown()
+            entry.transition(to: .stopped)
+            return
         } catch {
             entry.transition(to: .failed(fault: ServiceFault(from: error)))
             logger?.error(
@@ -66,8 +81,20 @@ package struct ServiceGraphEntryAdapter: ServiceLifecycle.Service {
 
         // Phase 2c: shutdown(). Async, non-throwing, expected to be
         // idempotent and bounded.
+        //
+        // Re-read the live instance rather than shutting down the one
+        // captured at phase 2a. `restart(at:)` and `recover(at:)` build a
+        // new generation and start it inline, without an adapter, so by the
+        // time we get here the entry may be serving something this task has
+        // never seen. Shutting down the captured value would close an
+        // already-drained generation while the live one keeps its
+        // connection open for the life of the process — and for an entry
+        // whose shutdown releases shared claims, it would release them out
+        // from under the generation still using them. Fall back to the
+        // captured instance only if the entry no longer resolves.
+        let live = entry.currentManagedService() ?? instance
         logger?.debug("Adapter: '\(entry.descriptor.id)' shutdown signalled — calling shutdown()")
-        await instance.shutdown()
+        await live.shutdown()
         entry.transition(to: .stopped)
         logger?.debug("Adapter: '\(entry.descriptor.id)' is .stopped")
     }
