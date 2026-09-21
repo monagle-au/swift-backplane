@@ -41,6 +41,25 @@ public actor ServiceGraph {
     /// cancelling its task. Configurable so tests can use short timeouts.
     private let shutdownTimeout: Duration
 
+    /// Cap on how long ``run()``'s inner `ServiceGroup` waits for every
+    /// adapter's graceful shutdown before cancelling them. `nil` — the
+    /// default, matching `ServiceLifecycle`'s own — means no cap.
+    ///
+    /// Worth setting whenever the entries do real I/O in `shutdown()`,
+    /// which integrations typically do: closing a socket, sending a
+    /// protocol-level disconnect, releasing a lease. A `shutdown()` that
+    /// blocks — an MQTT DISCONNECT to a broker that is already gone, say —
+    /// stalls the inner group indefinitely without this.
+    ///
+    /// **Set it below the *outer* group's `maximumGracefulShutdownDuration`
+    /// to be useful at all.** Whichever fires first wins, and the outer
+    /// group's expiry is a hard cancellation of everything — so an inner
+    /// cap that is larger never fires, and the graph loses the chance to
+    /// shut its entries down gracefully on its own terms. The library
+    /// cannot know the application's budget, hence a parameter rather than
+    /// a guessed default.
+    private let gracefulShutdownTimeout: Duration?
+
     /// Boot roots consulted by ``run()`` (the
     /// ``ServiceLifecycle/Service`` conformance) to prune the boot set
     /// to a transitive closure. Set via ``setBootRoots(_:)`` before the
@@ -68,6 +87,9 @@ public actor ServiceGraph {
     ///     (per-entry loggers are always constructed).
     ///   - config: application `ConfigReader` handed to factories via
     ///     ``BackplaneContext/config``; `nil` for graph-machinery tests.
+    ///   - gracefulShutdownTimeout: cap on the inner `ServiceGroup`'s
+    ///     graceful-shutdown wait in ``run()``; `nil` (default) means no
+    ///     cap. Set it below the outer group's own cap — see the property.
     ///   - shutdownTimeout: bound on a drained generation's
     ///     `shutdown()` before the graph cancels it.
     ///   - subgroupPolicies: per-tag overrides. Tags absent from
@@ -80,6 +102,7 @@ public actor ServiceGraph {
         logger: Logger? = nil,
         config: ConfigReader? = nil,
         shutdownTimeout: Duration = .seconds(30),
+        gracefulShutdownTimeout: Duration? = nil,
         subgroupPolicies: [SubgroupTag: SubgroupPolicy] = [:]
     ) throws {
         var map: [String: ServiceEntry] = [:]
@@ -90,6 +113,7 @@ public actor ServiceGraph {
         self.logger = logger
         self.config = config
         self.shutdownTimeout = shutdownTimeout
+        self.gracefulShutdownTimeout = gracefulShutdownTimeout
         self.resolvedPolicies = Self.resolvePolicies(
             descriptors: descriptors,
             overrides: subgroupPolicies
@@ -1381,12 +1405,14 @@ extension ServiceGraph: ServiceLifecycle.Service {
         // owns those. Graceful shutdown propagates from outer to inner
         // via Swift's structured concurrency cancellation +
         // ServiceLifecycle's `gracefulShutdown()` helper.
-        let inner = ServiceGroup(configuration: .init(
+        var innerConfiguration = ServiceGroupConfiguration(
             services: configurations,
             gracefulShutdownSignals: [],
             cancellationSignals: [],
             logger: innerLogger
-        ))
+        )
+        innerConfiguration.maximumGracefulShutdownDuration = gracefulShutdownTimeout
+        let inner = ServiceGroup(configuration: innerConfiguration)
         try await inner.run()
     }
 }

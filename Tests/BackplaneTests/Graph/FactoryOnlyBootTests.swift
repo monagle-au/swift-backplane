@@ -269,6 +269,62 @@ struct FactoryOnlyBootTests {
                 "the live generation must be shut down, not the one the adapter captured")
     }
 
+    /// Integrations do real I/O in `shutdown()` — closing a socket, sending
+    /// a protocol-level disconnect. One that blocks (an MQTT DISCONNECT to a
+    /// broker that is already gone) would otherwise stall the inner group
+    /// with nothing to bound it, leaving only the *outer* group's hard
+    /// cancellation, which defeats shutting down gracefully at all.
+    /// Must be driven through a real *graceful* shutdown, not by cancelling
+    /// the task: `ServiceGroup` only arms its graceful-shutdown timeout
+    /// inside `shutdownGracefully`, so a cancelled `run()` never consults
+    /// the cap. An earlier version of this test cancelled the runner, passed
+    /// in a millisecond, and proved nothing at all.
+    @Test("A slow shutdown() is bounded by the inner group's graceful cap")
+    func slowShutdownIsCapped() async throws {
+        final class SlowShutdown: ManagedService, @unchecked Sendable {
+            let entered = Mutex(false)
+            func start() async throws {}
+            func shutdown() async {
+                entered.withLock { $0 = true }
+                // Stands in for a teardown that waits on something far away:
+                // long, but cancellable, as NIO/URLSession teardowns are.
+                // Without the cap the group waits this out in full.
+                try? await Task.sleep(for: .seconds(30), clock: .continuous)
+            }
+        }
+
+        let key = ServiceKey<SlowShutdown>(id: "svc")
+        let service = SlowShutdown()
+        let graph = try ServiceGraph(
+            descriptors: [EntryDescriptor(key, subgroup: .integrations) { _ in service }],
+            gracefulShutdownTimeout: .milliseconds(200)
+        )
+        try await graph.bootFactories()
+
+        let outer = ServiceGroup(configuration: .init(
+            services: [.init(
+                service: graph,
+                successTerminationBehavior: .ignore,
+                failureTerminationBehavior: .ignore
+            )],
+            gracefulShutdownSignals: [],
+            cancellationSignals: [],
+            logger: Logger(label: "test.outer")
+        ))
+
+        let runner = Task { try await outer.run() }
+        try await waitFor("svc", in: graph) { $0 == .running }
+
+        let began = ContinuousClock.now
+        await outer.triggerGracefulShutdown()
+        _ = try? await runner.value
+        let elapsed = ContinuousClock.now - began
+
+        #expect(service.entered.withLock { $0 }, "shutdown() should have been entered")
+        #expect(elapsed < .seconds(10),
+                "the cap must cut the wait short rather than waiting out a 30s teardown")
+    }
+
     @Test("A restart requested while .starting is applied once running, not dropped")
     func restartDuringStartingIsDeferred() async throws {
         let key = ServiceKey<GatedStartService>(id: "svc")

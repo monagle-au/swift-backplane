@@ -12,6 +12,16 @@ from `1.0.0` onwards.
 
 ### Added
 
+- `ServiceGraph(gracefulShutdownTimeout:)` — caps how long `run()`'s inner
+  `ServiceGroup` waits for every adapter's graceful shutdown before
+  cancelling them. Defaults to `nil` (no cap), matching `ServiceLifecycle`'s
+  own default, so existing behaviour is unchanged. Worth setting whenever
+  entries do real I/O in `shutdown()` — closing a socket, sending a
+  protocol-level disconnect — because a teardown that waits on something far
+  away otherwise stalls the inner group with only the *outer* group's hard
+  cancellation as a backstop, which defeats shutting down gracefully at all.
+  Set it below the outer group's own cap: whichever fires first wins.
+
 - `ServiceGraph.bootFactories(roots:)` — runs every entry's factory but not
   its `start()`, leaving each in `.starting` with a live instance already
   resolvable. The eager half of the composed mode: a caller that needs to
