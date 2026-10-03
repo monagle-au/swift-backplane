@@ -108,15 +108,15 @@ package final class ServiceEntry: Sendable {
     /// Update the entry's lifecycle state and notify all stream
     /// subscribers.
     ///
-    /// Continuations are snapshotted under the lock and yielded outside
-    /// it so back-pressured streams never block other entry reads.
+    /// Yield while holding the state lock so concurrent transitions are
+    /// delivered in the same order in which they update the state. AsyncStream
+    /// continuations only enqueue here; they do not run subscriber code.
     package func transition(to newState: ServiceState) {
-        let snapshot = _state.withLock { s -> [AsyncStream<ServiceState>.Continuation] in
+        _state.withLock { s in
             s.lifecycleState = newState
-            return Array(s.continuations.values)
-        }
-        for continuation in snapshot {
-            continuation.yield(newState)
+            for continuation in s.continuations.values {
+                continuation.yield(newState)
+            }
         }
     }
 
@@ -128,14 +128,12 @@ package final class ServiceEntry: Sendable {
     /// ``ServiceHealthReporter/markDegraded(fault:)``. Routing through
     /// ``ServiceGraph/resolve(_:)`` is unaffected.
     package func markDegraded(fault: ServiceFault) {
-        let snapshot = _state.withLock { s -> [AsyncStream<ServiceState>.Continuation]? in
-            guard Self.isResolutionReady(s.lifecycleState) else { return nil }
+        _state.withLock { s in
+            guard Self.isResolutionReady(s.lifecycleState) else { return }
             s.lifecycleState = .degraded(fault: fault)
-            return Array(s.continuations.values)
-        }
-        guard let snapshot else { return }
-        for continuation in snapshot {
-            continuation.yield(.degraded(fault: fault))
+            for continuation in s.continuations.values {
+                continuation.yield(.degraded(fault: fault))
+            }
         }
     }
 
@@ -145,14 +143,12 @@ package final class ServiceEntry: Sendable {
     /// Used by the entry's own service via
     /// ``ServiceHealthReporter/markHealthy()``.
     package func markHealthy() {
-        let snapshot = _state.withLock { s -> [AsyncStream<ServiceState>.Continuation]? in
-            guard case .degraded = s.lifecycleState else { return nil }
+        _state.withLock { s in
+            guard case .degraded = s.lifecycleState else { return }
             s.lifecycleState = .running
-            return Array(s.continuations.values)
-        }
-        guard let snapshot else { return }
-        for continuation in snapshot {
-            continuation.yield(.running)
+            for continuation in s.continuations.values {
+                continuation.yield(.running)
+            }
         }
     }
 
@@ -252,13 +248,16 @@ package final class ServiceEntry: Sendable {
                 continuation.finish()
                 return
             }
-            let (subID, current) = _state.withLock { s -> (UInt64, ServiceState) in
+            let subID = _state.withLock { s -> UInt64 in
                 s.subscriberCounter += 1
                 let id = s.subscriberCounter
                 s.continuations[id] = continuation
-                return (id, s.lifecycleState)
+                // Register and replay atomically with transitions. Otherwise
+                // a transition can enqueue its new value after registration
+                // but before this older replay, leaving subscribers stale.
+                continuation.yield(s.lifecycleState)
+                return id
             }
-            continuation.yield(current)
             continuation.onTermination = { [weak self] _ in
                 self?._state.withLock { $0.continuations[subID] = nil }
             }

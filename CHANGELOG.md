@@ -8,6 +8,12 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- `ServiceEntry` now delivers lifecycle-state stream updates in the same
+  order as state changes, including the initial replay when a subscriber
+  joins during concurrent transitions.
+
 ## [2.2.0] — 2026-09-21
 
 ### Added
