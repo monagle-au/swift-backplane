@@ -8,6 +8,8 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+## [2.2.1] — 2026-10-03
+
 ### Fixed
 
 - Entry state streams (`ServiceGraph.stateStream(of:)`, the lifecycle
@@ -558,7 +560,8 @@ follow strict SemVer.
 - Swift 6.2+
 - macOS 15+
 
-[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v2.2.1...HEAD
+[2.2.1]: https://github.com/monagle-au/swift-backplane/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/monagle-au/swift-backplane/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/monagle-au/swift-backplane/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/monagle-au/swift-backplane/compare/v2.0.0...v2.0.1
