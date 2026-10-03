@@ -36,6 +36,17 @@ package final class ServiceEntry: Sendable {
         /// Lazily-allocated lifecycle handle. Shared across all callers of
         /// ``lifecycle(in:)``.
         var lifecycleHandle: (any ServiceLifecycleHandle)?
+        /// States waiting to be yielded, in the order they were applied.
+        /// See ``ServiceEntry/drainDeliveries()``.
+        var pendingDeliveries: [Delivery] = []
+        /// True while some caller is draining ``pendingDeliveries``.
+        var isDelivering = false
+    }
+
+    /// One state bound for the subscribers registered when it was applied.
+    private struct Delivery {
+        let state: ServiceState
+        let continuations: [AsyncStream<ServiceState>.Continuation]
     }
 
     private let _state: Mutex<State>
@@ -107,16 +118,68 @@ package final class ServiceEntry: Sendable {
 
     /// Update the entry's lifecycle state and notify all stream
     /// subscribers.
-    ///
-    /// Continuations are snapshotted under the lock and yielded outside
-    /// it so back-pressured streams never block other entry reads.
     package func transition(to newState: ServiceState) {
-        let snapshot = _state.withLock { s -> [AsyncStream<ServiceState>.Continuation] in
-            s.lifecycleState = newState
-            return Array(s.continuations.values)
+        let shouldDrain = _state.withLock { s in
+            Self.apply(newState, to: &s)
         }
-        for continuation in snapshot {
-            continuation.yield(newState)
+        if shouldDrain { drainDeliveries() }
+    }
+
+    /// Set the lifecycle state and queue it for every current subscriber
+    /// in the same critical section. Returns whether the caller must
+    /// drain — see ``enqueue(_:to:in:)``.
+    private static func apply(_ newState: ServiceState, to s: inout State) -> Bool {
+        s.lifecycleState = newState
+        return enqueue(newState, to: Array(s.continuations.values), in: &s)
+    }
+
+    // MARK: - Ordered delivery
+
+    /// Queue a state for delivery. Call with the lock held, in the same
+    /// critical section that applied the state (or registered the
+    /// subscriber), so queue order matches the order states were applied.
+    ///
+    /// Returns true when no drain is running, making the caller the
+    /// drainer: it must call ``drainDeliveries()`` after releasing the
+    /// lock.
+    private static func enqueue(
+        _ state: ServiceState,
+        to continuations: [AsyncStream<ServiceState>.Continuation],
+        in s: inout State
+    ) -> Bool {
+        s.pendingDeliveries.append(Delivery(state: state, continuations: continuations))
+        guard !s.isDelivering else { return false }
+        s.isDelivering = true
+        return true
+    }
+
+    /// Yield queued states in order until the queue is empty.
+    ///
+    /// Only one caller drains at a time, so each stream receives states
+    /// in the order they were applied: a snapshot yielded straight after
+    /// unlocking can be overtaken by a concurrent transition (or a
+    /// subscriber's replay), leaving a stale state as the stream's latest
+    /// element.
+    ///
+    /// Yields must happen outside the entry lock. `yield` resumes a
+    /// waiting consumer, which takes that task's status lock, and
+    /// `Task.cancel()` holds the same status lock while the stream's
+    /// `onTermination` runs. Since `onTermination` takes the entry lock,
+    /// yielding under it deadlocks against a cancelling subscriber.
+    private func drainDeliveries() {
+        while true {
+            let batch = _state.withLock { s -> [Delivery] in
+                let batch = s.pendingDeliveries
+                s.pendingDeliveries = []
+                if batch.isEmpty { s.isDelivering = false }
+                return batch
+            }
+            if batch.isEmpty { return }
+            for delivery in batch {
+                for continuation in delivery.continuations {
+                    continuation.yield(delivery.state)
+                }
+            }
         }
     }
 
@@ -128,15 +191,11 @@ package final class ServiceEntry: Sendable {
     /// ``ServiceHealthReporter/markDegraded(fault:)``. Routing through
     /// ``ServiceGraph/resolve(_:)`` is unaffected.
     package func markDegraded(fault: ServiceFault) {
-        let snapshot = _state.withLock { s -> [AsyncStream<ServiceState>.Continuation]? in
-            guard Self.isResolutionReady(s.lifecycleState) else { return nil }
-            s.lifecycleState = .degraded(fault: fault)
-            return Array(s.continuations.values)
+        let shouldDrain = _state.withLock { s in
+            guard Self.isResolutionReady(s.lifecycleState) else { return false }
+            return Self.apply(.degraded(fault: fault), to: &s)
         }
-        guard let snapshot else { return }
-        for continuation in snapshot {
-            continuation.yield(.degraded(fault: fault))
-        }
+        if shouldDrain { drainDeliveries() }
     }
 
     /// Conditional transition `.degraded` → `.running`. No-op for any
@@ -145,15 +204,11 @@ package final class ServiceEntry: Sendable {
     /// Used by the entry's own service via
     /// ``ServiceHealthReporter/markHealthy()``.
     package func markHealthy() {
-        let snapshot = _state.withLock { s -> [AsyncStream<ServiceState>.Continuation]? in
-            guard case .degraded = s.lifecycleState else { return nil }
-            s.lifecycleState = .running
-            return Array(s.continuations.values)
+        let shouldDrain = _state.withLock { s in
+            guard case .degraded = s.lifecycleState else { return false }
+            return Self.apply(.running, to: &s)
         }
-        guard let snapshot else { return }
-        for continuation in snapshot {
-            continuation.yield(.running)
-        }
+        if shouldDrain { drainDeliveries() }
     }
 
     // MARK: - Generation management
@@ -245,20 +300,22 @@ package final class ServiceEntry: Sendable {
     ///
     /// The stream yields the current state immediately (replay-first
     /// semantic), then every subsequent transition until the stream is
-    /// cancelled.
+    /// cancelled. The replay is queued in the same critical section
+    /// that registers the subscriber, so no transition can be delivered
+    /// ahead of it (see ``drainDeliveries()``).
     package func stateStream() -> AsyncStream<ServiceState> {
         AsyncStream { [weak self] continuation in
             guard let self else {
                 continuation.finish()
                 return
             }
-            let (subID, current) = _state.withLock { s -> (UInt64, ServiceState) in
+            let (subID, shouldDrain) = _state.withLock { s -> (UInt64, Bool) in
                 s.subscriberCounter += 1
                 let id = s.subscriberCounter
                 s.continuations[id] = continuation
-                return (id, s.lifecycleState)
+                return (id, Self.enqueue(s.lifecycleState, to: [continuation], in: &s))
             }
-            continuation.yield(current)
+            if shouldDrain { drainDeliveries() }
             continuation.onTermination = { [weak self] _ in
                 self?._state.withLock { $0.continuations[subID] = nil }
             }
