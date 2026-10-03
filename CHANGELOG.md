@@ -8,6 +8,22 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+### Fixed
+
+- Entry state streams (`ServiceGraph.stateStream(of:)`, the lifecycle
+  handle's stream) now deliver states in the order they were applied.
+  Both the subscriber's replay and every transition were yielded *after*
+  releasing the entry lock, so a concurrent transition could overtake
+  either one, leaving a stale state as the stream's latest element while
+  `state(of:)` reported the correct state. Health reports
+  (`markDegraded` / `markHealthy`) had the same gap. States are now
+  queued in the critical section that applies them (or registers the
+  subscriber) and yielded in order by a single drainer, still outside
+  the lock: yielding under it would deadlock against a subscriber being
+  cancelled. Anything that reacts to stream edges rather than polling
+  `state(of:)`, such as re-dispatching on `.running`, could previously
+  act on a stale final state.
+
 ## [2.2.0] — 2026-09-21
 
 ### Added
