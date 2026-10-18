@@ -248,6 +248,9 @@ struct LevelTableLogHandlerTests {
     func concurrentLogAndSet() async {
         let sink = Sink()
         let table = LogLevelTable(baseLevel: .info)
+        // Live before any logger starts, so debug lines reach the sink and
+        // the allSatisfy check below is not passed by an empty sink.
+        table.set(rule("matter=debug"))
         await withTaskGroup(of: Void.self) { group in
             group.addTask {
                 for i in 0..<1_000 {
@@ -265,6 +268,7 @@ struct LevelTableLogHandlerTests {
                 }
             }
         }
+        #expect(!sink.all.isEmpty)
         #expect(sink.all.allSatisfy { $0 == "debug maybe" })
         let logger = makeLogger("matter.controller", table: table, sink: sink)
         #expect(logger.logLevel == .debug)
