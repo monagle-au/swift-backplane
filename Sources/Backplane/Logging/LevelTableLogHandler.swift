@@ -13,7 +13,8 @@ import Synchronization
 ///   for this handler's label, so swift-log's fast-path check admits every
 ///   candidate. In the steady state it is a few atomic loads and no lock;
 ///   it also reads the clock while any live rule has an `expiresAt`, and
-///   takes the lock once when a rule expires or the table has changed.
+///   each handler takes the lock once, to refill its cache, after a rule
+///   expires or the table changes.
 /// - ``log(event:)`` then applies the exact rule, using the message's
 ///   subsystem: the first of ``LogLevelTable/subsystemKeys`` found in the
 ///   message's metadata, else in the logger's metadata

@@ -214,11 +214,12 @@ and wraps the plan's handler factory in `LevelTableLogHandler`. Rules are
 `logLevel` getter is a cached per-label minimum (`LevelCache`, an
 `Atomic<UInt64>` packing generation and level): a few atomic loads and no
 lock in the steady state, plus a clock read while any rule has an expiry
-and the lock once per expiry (it prunes expired rules); `log(event:)` applies the exact subsystem rule. Instance `logLevel`
-is a floor (only quieter). `LevelTableLogHandler` must be outermost, never
+and the lock once per expiry (it prunes expired rules). `log(event:)`
+applies the exact subsystem rule. Instance `logLevel` is a floor (only quieter). `LevelTableLogHandler` must be outermost, never
 inside a `MultiplexLogHandler` (the multiplex records its level once).
-`BootstrapPlan.rejectedLogRules` makes `apply` warn once per entry, through
-the table's base level. After merging `LoggingOptions`, set both
+`BootstrapPlan.rejectedLogRules` makes `apply` warn once per entry under label
+`backplane.logging`, so the table's level for that label applies (normally
+the base level). After merging `LoggingOptions`, set both
 `plan.logRules = merged.resolvedLogRules` and
 `plan.rejectedLogRules = merged.rejectedLogRules`.
 Tests build their own `LogLevelTable` and loggers via

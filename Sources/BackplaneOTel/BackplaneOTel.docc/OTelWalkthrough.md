@@ -132,6 +132,10 @@ explicitly passed.
 
 ## Combine with a different log handler
 
+Passing `logsEnabled: true` bypasses the level table: swift-otel
+bootstraps `LoggingSystem` itself, so log rules and runtime `set` have
+no effect.
+
 By default `makeBootstrap(logsEnabled: false)` leaves the logging
 subsystem alone — you'll typically combine OTel tracing/metrics
 with `StructuredLogHandler` (vendor-neutral JSON), `GCPLogHandler`

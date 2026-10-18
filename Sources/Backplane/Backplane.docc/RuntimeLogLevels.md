@@ -68,11 +68,16 @@ coordinator logs one warning per entry of
   level, so `--log-level error` hides it; a `backplane=…` rule can
   surface it.
 - If logging was already bootstrapped, the whole plan's logging
-  configuration is skipped, rules and warnings included. This also
-  happens when logging is bootstrapped elsewhere first (`BackplaneOTel`
-  with OTel logs enabled, or `main()` calling `bootstrapLogging`): the
-  table is never installed, so `--log-rule` and `logging.rules` do
-  nothing.
+  configuration is skipped, rules and warnings included. Two cases
+  follow:
+  - **OTel logs enabled.** swift-otel bootstraps `LoggingSystem`
+    itself, so no ``LevelTableLogHandler`` is in use. The table is not
+    consulted at all: rules and runtime `set` do nothing.
+  - **`main()` calls `bootstrapLogging` first.** That call goes through
+    `apply`, so the table is installed with that call's base level and
+    no rules. The command's later plan is skipped, so its `--log-rule`
+    / `logging.rules` (and rejected-rule warnings) are dropped.
+    Runtime `set(_:)`, `remove` and `reset()` still work.
 
 ### Changing at runtime
 

@@ -39,16 +39,20 @@ from `1.0.0` onwards.
   `--log-level error` hides it, though a `backplane=…` rule can surface
   it. If logging was already bootstrapped, the
   whole plan's logging configuration is skipped, rules and warnings
-  included. The same applies when logging is bootstrapped elsewhere
-  first (for example `BackplaneOTel` with OTel logs enabled, or `main()`
-  calling `bootstrapLogging`): the table is never installed, so
-  `--log-rule` and `logging.rules` do nothing.
+  included. Two cases follow. With OTel logs enabled, swift-otel
+  bootstraps `LoggingSystem` itself, so no `LevelTableLogHandler` is in
+  use: the table is not consulted, and rules and runtime `set` do
+  nothing. If `main()` calls `bootstrapLogging` first, that call goes
+  through `apply`, so the table is installed with that call's base level
+  and no rules; the command's later plan is skipped, so its `--log-rule`
+  / `logging.rules` (and rejected-rule warnings) are dropped, while
+  runtime `set(_:)`, `remove` and `reset()` still work.
 - `LoggingOptions`: repeatable `--log-rule label[:subsystem]=level` (a
   malformed rule is a `validate()` error), the `logging.rules` config key
   (string array, lenient: malformed entries are skipped), and
   `resolvedLogRules` and `rejectedLogRules`. Config rules come before CLI
-  rules, and later rules win for the same label and subsystem. Merge, then set both fields on the plan:
-  `plan.logRules = merged.resolvedLogRules` and
+  rules, and later rules win for the same label and subsystem. Merge,
+  then set both fields on the plan: `plan.logRules = merged.resolvedLogRules` and
   `plan.rejectedLogRules = merged.rejectedLogRules`.
 
 ### Changed

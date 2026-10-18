@@ -40,7 +40,8 @@ extension BackplaneApplication {
     ///
     /// This method routes through ``BootstrapCoordinator/shared``, so a
     /// later call to ``BackplaneCommand/bootstrap(config:environment:)``
-    /// from inside the same process won't re-install logging.
+    /// from inside the same process won't re-install logging, and that
+    /// later plan's ``BootstrapPlan/logRules`` are dropped too.
     ///
     /// - Parameters:
     ///   - factory: Produces the `LogHandler` for each new logger. The

@@ -54,7 +54,8 @@ same service graph and configuration story.
   `label[:subsystem]=level` rules with optional expiry, set from
   `--log-rule` / `logging.rules` at startup and changeable while
   running. Every bootstrapped handler consults it, at the cost of a few
-  atomic loads and no lock per log-level check in the steady state.
+  atomic loads and no lock per log-level check in the steady state (plus a
+  clock read while a rule has an expiry).
 - **CLI option groups** for common observability flags
   (`LoggingOptions`, `TracingOptions`, `MetricsOptions`).
 - **Trait-gated optional integrations**: every cloud-vendor or
