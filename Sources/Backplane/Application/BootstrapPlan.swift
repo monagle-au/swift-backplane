@@ -68,6 +68,13 @@ public struct BootstrapPlan: Sendable {
     /// these. See ``LoggingOptions/resolvedLogRules``.
     public var logRules: [LogLevelRule]
 
+    /// Malformed rule texts that were dropped while resolving
+    /// ``logRules`` (see ``LoggingOptions/rejectedLogRules``). The
+    /// coordinator logs one warning per entry once logging is installed.
+    /// Informational only: it does not affect ``isEmpty`` or
+    /// ``hasLoggingConfiguration``, so it never causes an install on its own.
+    public var rejectedLogRules: [String] = []
+
     /// Optional cross-cutting metadata provider, attached to every logger
     /// constructed after bootstrap.
     public var loggerMetadataProvider: Logger.MetadataProvider?

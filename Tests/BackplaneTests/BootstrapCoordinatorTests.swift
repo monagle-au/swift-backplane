@@ -296,6 +296,28 @@ struct BootstrapCoordinatorTests {
         #expect(table.rules() == plan.logRules)
     }
 
+    @Test("rejected log rules are warned about once through the installed handler")
+    func rejectedRulesWarned() {
+        let coordinator = makeCoordinator(log: CallLog())
+        let sink = Sink()
+        var plan = BootstrapPlan()
+        plan.logLevel = .info
+        plan.levelTable = LogLevelTable()
+        plan.logHandlerFactory = { _ in SinkLogHandler(sink: sink) }
+        plan.rejectedLogRules = ["acumen=debg"]
+        coordinator.apply(plan)
+
+        #expect(sink.all == ["warning Ignoring malformed logging rule 'acumen=debg'"])
+    }
+
+    @Test("rejectedLogRules alone does not configure logging")
+    func rejectedRulesAloneAreEmpty() {
+        var plan = BootstrapPlan()
+        plan.rejectedLogRules = ["x"]
+        #expect(plan.isEmpty)
+        #expect(plan.hasLoggingConfiguration == false)
+    }
+
     @Test("a plan with only a levelTable is still empty")
     func levelTableAloneIsEmpty() {
         var plan = BootstrapPlan()

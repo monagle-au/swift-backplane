@@ -154,11 +154,20 @@ public final class BootstrapCoordinator: Sendable {
                 ?? BackplaneLogging.cloudRunOrStream.asFactory
             let table = plan.levelTable ?? BackplaneLogging.levelTable
             table.install(baseLevel: resolvedLevel, configuredRules: plan.logRules)
+            let installed = LevelTableLogHandler.factory(wrapping: factory, table: table)
             self.installLogging(
-                LevelTableLogHandler.factory(wrapping: factory, table: table),
+                installed,
                 resolvedLevel,
                 plan.loggerMetadataProvider
             )
+            // Built from the installed factory (not the global system) so
+            // the warning goes through exactly the handler just installed.
+            if !plan.rejectedLogRules.isEmpty {
+                let logger = Logger(label: "backplane.logging", factory: installed)
+                for text in plan.rejectedLogRules {
+                    logger.warning("Ignoring malformed logging rule '\(text)'")
+                }
+            }
         }
     }
 

@@ -17,23 +17,16 @@ import Logging
 /// struct Serve: PersistentCommand {
 ///     typealias App = MyApp
 ///     @OptionGroup var logging: LoggingOptions
-///     var requiredServices: [any ServiceKey.Type] { [] }
+///     var requiredServices: ServiceList { [] }
 ///
 ///     func bootstrap(config: ConfigReader, environment: Environment) -> BootstrapPlan {
+///         let merged = logging.merging(from: config.scoped(to: "logging"))
 ///         var plan = BootstrapPlan()
-///         plan.logLevel = logging.resolvedLogLevel
-///         plan.logRules = logging.resolvedLogRules
-///         plan.logHandlerFactory = logging.format.factory(default: BackplaneLogging.cloudRunOrStream.asFactory)
+///         plan.logLevel = merged.resolvedLogLevel
+///         plan.logRules = merged.resolvedLogRules
+///         plan.rejectedLogRules = merged.rejectedLogRules
+///         plan.logHandlerFactory = merged.format.factory(default: BackplaneLogging.cloudRunOrStream.asFactory)
 ///         return plan
-///     }
-///
-///     func run(config: ConfigReader) async throws {
-///         // Logging is up; surface config rules that were dropped.
-///         let logger = Logger(label: "serve")
-///         let options = logging.merging(from: config.scoped(to: "logging"))
-///         for text in options.rejectedLogRules {
-///             logger.warning("Ignoring malformed logging rule '\(text)'")
-///         }
 ///     }
 /// }
 /// ```
@@ -96,7 +89,9 @@ public struct LoggingOptions: ParsableArguments, Sendable {
 
     /// The non-empty ``logRules`` entries that fail to parse, in order.
     /// ``resolvedLogRules`` drops these leniently; log each one as a warning
-    /// after bootstrap so a typo such as `acumen.agent=debg` is not silent.
+    /// via ``BootstrapPlan/rejectedLogRules`` so a typo such as
+    /// `acumen.agent=debg` is not silent (the coordinator warns once logging
+    /// is installed).
     /// This covers config-sourced entries (`logging.rules`); a malformed
     /// `--log-rule` never gets here because ``validate()`` rejects it, by
     /// design.
@@ -144,21 +139,13 @@ public struct LoggingOptions: ParsableArguments, Sendable {
     ///
     /// ```swift
     /// func bootstrap(config: ConfigReader, environment: Environment) -> BootstrapPlan {
-    ///     let opts = logging.merging(from: config.scoped(to: "logging"))
+    ///     let merged = logging.merging(from: config.scoped(to: "logging"))
     ///     var plan = BootstrapPlan()
-    ///     plan.logLevel = opts.resolvedLogLevel
-    ///     plan.logRules = opts.resolvedLogRules
-    ///     plan.logHandlerFactory = opts.format.factory(default: BackplaneLogging.cloudRunOrStream.asFactory)
+    ///     plan.logLevel = merged.resolvedLogLevel
+    ///     plan.logRules = merged.resolvedLogRules
+    ///     plan.rejectedLogRules = merged.rejectedLogRules
+    ///     plan.logHandlerFactory = merged.format.factory(default: BackplaneLogging.cloudRunOrStream.asFactory)
     ///     return plan
-    /// }
-    ///
-    /// func run(config: ConfigReader) async throws {
-    ///     // Logging is up; surface config rules that were dropped.
-    ///     let logger = Logger(label: "serve")
-    ///     let opts = logging.merging(from: config.scoped(to: "logging"))
-    ///     for text in opts.rejectedLogRules {
-    ///         logger.warning("Ignoring malformed logging rule '\(text)'")
-    ///     }
     /// }
     /// ```
     public func merging(from config: ConfigReader) -> LoggingOptions {
