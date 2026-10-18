@@ -263,7 +263,7 @@ struct LevelTableLogHandlerTests {
             group.addTask {
                 for i in 0..<200 {
                     if i % 20 == 0 { await Task.yield() }
-                    if i % 2 == 0 { table.set(rule("matter=debug")) } else { table.remove(labelPrefix: "matter") }
+                    if i % 2 == 0 { table.remove(labelPrefix: "matter") } else { table.set(rule("matter=debug")) }
                 }
                 table.set(rule("matter=debug"))
             }
