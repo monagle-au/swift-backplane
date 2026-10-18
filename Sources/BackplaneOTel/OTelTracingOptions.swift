@@ -21,7 +21,7 @@ import Configuration
 /// struct Serve: PersistentCommand {
 ///     typealias App = MyApp
 ///     @OptionGroup var tracing: OTelTracingOptions
-///     var requiredServices: [PartialKeyPath<Services>] { [] }
+///     var requiredServices: ServiceList { [] }
 ///
 ///     func bootstrap(config: ConfigReader, environment: Environment) throws -> BootstrapPlan {
 ///         try BackplaneOTel.makeBootstrap(

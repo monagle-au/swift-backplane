@@ -113,6 +113,8 @@ struct Serve: PersistentCommand {
 
         var plan = BootstrapPlan()
         plan.logLevel = log.resolvedLogLevel
+        plan.logRules = log.resolvedLogRules
+        plan.rejectedLogRules = log.rejectedLogRules
         plan.logHandlerFactory = log.format.factory(default: BackplaneLogging.cloudRunOrStream.asFactory)
         // ... use trace.endpoint etc. to build an Instrument and assign plan.instrument
         return plan

@@ -44,7 +44,7 @@ private struct UncheckedSendableBox<T>: @unchecked Sendable {
 ///     typealias App = MyApp
 ///     static let configuration = CommandConfiguration(abstract: "Run migrations")
 ///
-///     var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
+///     var requiredServices: ServiceList { [\.postgres] }
 ///
 ///     func execute(with context: BackplaneContext) async throws {
 ///         let db = try await context.requireService(\.postgres)
@@ -221,7 +221,7 @@ extension BackplaneCommand {
 /// struct Serve: PersistentCommand {
 ///     typealias App = MyApp
 ///     static let configuration = CommandConfiguration(abstract: "Start the server")
-///     var requiredServices: [PartialKeyPath<Services>] { [\.httpKey] }
+///     var requiredServices: ServiceList { [\.httpKey] }
 /// }
 /// ```
 public protocol PersistentCommand: BackplaneCommand {}
@@ -239,7 +239,7 @@ public protocol PersistentCommand: BackplaneCommand {}
 /// struct Migrate: TaskCommand {
 ///     typealias App = MyApp
 ///     static let configuration = CommandConfiguration(abstract: "Run migrations")
-///     var requiredServices: [PartialKeyPath<Services>] { [\.postgres] }
+///     var requiredServices: ServiceList { [\.postgres] }
 ///
 ///     func execute(with context: BackplaneContext) async throws {
 ///         let db = try await context.requireService(\.postgres)

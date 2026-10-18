@@ -282,7 +282,8 @@ entries so telemetry flows from the very first span.
 Three reusable `@OptionGroup` types let commands take
 configuration via CLI flags:
 
-- ``LoggingOptions`` — `--log-level`, `--log-format`.
+- ``LoggingOptions`` — `--log-level`, `--log-format`, and the
+  repeatable `--log-rule label[:subsystem]=level`.
 - ``TracingOptions`` — `--trace`, `--otel-endpoint`,
   `--otel-service-name`, `--trace-sample`.
 - ``MetricsOptions`` — `--metrics`, `--metrics-endpoint`,
@@ -311,6 +312,16 @@ Vendor-flavoured profiles (e.g. Cloud Logging's magic-key dialect
 in the `BackplaneGCP` product) live in opt-in trait-gated targets
 and extend ``StructuredLogProfile`` with `static let` factories.
 Consumers can add their own (Datadog, Elastic, …) the same way.
+
+### Runtime log levels
+
+Every handler the coordinator installs is wrapped in a
+``LevelTableLogHandler`` over ``BackplaneLogging/levelTable``. The
+bootstrap's level becomes the table's base level, and
+``BootstrapPlan/logRules`` become its configured rules. Admin code can
+then ``LogLevelTable/set(_:)``, ``LogLevelTable/remove(labelPrefix:subsystem:)``
+and ``LogLevelTable/reset()`` rules (by label prefix, optional
+subsystem, optional expiry) without a restart. See <doc:RuntimeLogLevels>.
 
 ## Trait-gated optional surface
 

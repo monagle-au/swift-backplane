@@ -204,6 +204,27 @@ EntryDescriptor(Services().auditStore,
 - Overriding a conforming type's defaults:
   `EntryDescriptor(\.postgres, subgroup: .integrations, replacement: .coldRestart)`.
 
+### Logging levels
+
+`BootstrapCoordinator.apply` installs the resolved level and
+`BootstrapPlan.logRules` into `plan.levelTable ?? BackplaneLogging.levelTable`
+and wraps the plan's handler factory in `LevelTableLogHandler`. Rules are
+`LogLevelRule(labelPrefix:subsystem:level:expiresAt:)` (text form
+`label[:subsystem]=level`, `*` = any subsystem → `nil`). The handler's
+`logLevel` getter is a lock-free cached per-label minimum (`LevelCache`,
+an `Atomic<UInt64>` packing generation and level) that also prunes expired
+rules; `log(event:)` applies the exact subsystem rule. Instance `logLevel`
+is a floor (only quieter). `LevelTableLogHandler` must be outermost, never
+inside a `MultiplexLogHandler` (the multiplex records its level once).
+`BootstrapPlan.rejectedLogRules` makes `apply` warn once per entry, through
+the table's base level. After merging `LoggingOptions`, set both
+`plan.logRules = merged.resolvedLogRules` and
+`plan.rejectedLogRules = merged.rejectedLogRules`.
+Tests build their own `LogLevelTable` and loggers via
+`Logger(label:factory:)` and inject `plan.levelTable` or their own table;
+never `LoggingSystem.bootstrap`. The one deliberate exception is
+`defaultsToProcessTable`, the only test that touches `BackplaneLogging.levelTable`.
+
 ### Writing a command
 
 Single-command app (no `services()` needed when the required types
