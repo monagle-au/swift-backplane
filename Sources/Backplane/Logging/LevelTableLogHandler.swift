@@ -97,6 +97,31 @@ public struct LevelTableLogHandler: LogHandler {
         wrapped.log(event: event)
     }
 
+    // swift-log's defaults for this and `log(event:)` call each other, so a
+    // caller of the flat form would recurse without this forward.
+    @available(*, deprecated, renamed: "log(event:)")
+    public func log(
+        level: Logger.Level,
+        message: Logger.Message,
+        metadata: Logger.Metadata?,
+        source: String,
+        file: String,
+        function: String,
+        line: UInt
+    ) {
+        self.log(
+            event: LogEvent(
+                level: level,
+                message: message,
+                metadata: metadata,
+                source: source,
+                file: file,
+                function: function,
+                line: line
+            )
+        )
+    }
+
     private func subsystem(of event: LogEvent) -> String? {
         let keys = table.subsystemKeys
         if let explicit = event.metadata {
