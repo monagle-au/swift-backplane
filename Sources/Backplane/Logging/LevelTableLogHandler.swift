@@ -11,8 +11,9 @@ import Synchronization
 ///
 /// - The `logLevel` getter returns the lowest level any live rule allows
 ///   for this handler's label, so swift-log's fast-path check admits every
-///   candidate. It is two atomic loads unless the table has changed since
-///   the last call.
+///   candidate. In the steady state it is a few atomic loads and no lock;
+///   it also reads the clock while any live rule has an `expiresAt`, and
+///   takes the lock once when a rule expires or the table has changed.
 /// - ``log(event:)`` then applies the exact rule, using the message's
 ///   subsystem: the first of ``LogLevelTable/subsystemKeys`` found in the
 ///   message's metadata, else in the logger's metadata

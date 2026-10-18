@@ -44,9 +44,11 @@ import Synchronization
 /// ## Cost
 ///
 /// Every change bumps ``generation``. Handlers cache their label's
-/// minimum level against it, so the per-call `logLevel` check is two
-/// atomic loads; the lock is taken only after a change, or for
-/// messages from a label whose level depends on subsystem.
+/// minimum level against it, so in the steady state the per-call `logLevel`
+/// check is a few atomic loads and no lock. While any live rule has an
+/// `expiresAt` each check also reads the clock, and the lock is taken once
+/// when a rule actually expires, after a change, or for messages from a
+/// label whose level depends on subsystem.
 public final class LogLevelTable: Sendable {
 
     /// Metadata keys read for a message's subsystem, in order.

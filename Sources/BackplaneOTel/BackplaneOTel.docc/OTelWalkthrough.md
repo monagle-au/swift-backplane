@@ -152,7 +152,10 @@ func bootstrap(config: ConfigReader, environment: Environment) throws -> Bootstr
     )
 
     plan.logHandlerFactory = BackplaneLogging.cloudRunOrStream.asFactory
-    plan.logLevel = logging.resolvedLogLevel
+    let merged = logging.merging(from: config.scoped(to: "logging"))
+    plan.logLevel = merged.resolvedLogLevel
+    plan.logRules = merged.resolvedLogRules
+    plan.rejectedLogRules = merged.rejectedLogRules
     plan.loggerMetadataProvider = OTel.makeLoggingMetadataProvider()
 
     return plan

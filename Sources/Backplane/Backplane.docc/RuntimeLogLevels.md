@@ -63,10 +63,16 @@ coordinator logs one warning per entry of
 ``BootstrapPlan/rejectedLogRules``:
 `Ignoring malformed logging rule '<text>'`. Two caveats:
 
-- The warning goes through the table, so the table's base level
-  applies. `--log-level error` hides it.
+- The warning is logged under label `backplane.logging` through the
+  table, so that label's level applies. Normally that is the base
+  level, so `--log-level error` hides it; a `backplane=…` rule can
+  surface it.
 - If logging was already bootstrapped, the whole plan's logging
-  configuration is skipped, rules and warnings included.
+  configuration is skipped, rules and warnings included. This also
+  happens when logging is bootstrapped elsewhere first (`BackplaneOTel`
+  with OTel logs enabled, or `main()` calling `bootstrapLogging`): the
+  table is never installed, so `--log-rule` and `logging.rules` do
+  nothing.
 
 ### Changing at runtime
 
@@ -101,17 +107,20 @@ at construction, so rule changes would not reach it. Wrap the
 multiplex instead. The coordinator already does this for the factory
 in ``BootstrapPlan/logHandlerFactory``, and a custom `installLogging`
 hook receives the already-wrapped factory (its level argument is
-informational only).
+informational only). A custom hook must not set
+`handler.logLevel = level`: that creates a per-instance floor which
+stops rules lowering the level.
 
 ### Cost
 
-The `logLevel` check swift-log runs on every call is two atomic loads.
+In the steady state the `logLevel` check swift-log runs on every call
+is a few atomic loads and no lock.
 Each handler caches its label's minimum level against
 ``LogLevelTable/generation``, and the table bumps the generation on
-every change. The getter also prunes expired rules without taking a
-lock. The table lock is taken only after a change, or for a
-message that passed the check from a label whose level depends on
-subsystem.
+every change. While any live rule has an `expiresAt`, each check also reads the
+clock, and the lock is taken once when a rule actually expires. The
+table lock is also taken after a change, or for a message that passed
+the check from a label whose level depends on subsystem.
 
 ## Topics
 

@@ -128,6 +128,10 @@ Precedence on every field is:
 2. **`ConfigReader` value** (env var, `.env`, in-memory provider).
 3. **Built-in default** (typically `nil` / `false` / `.auto`).
 
+Log rules are the exception: config and CLI rules combine (config
+first), and a CLI rule wins only over a config rule for the same label
+and subsystem.
+
 Booleans deserve a small footnote: ArgumentParser can't tell
 "the user left `--trace` at its default" from "the user passed
 `--no-trace`", so config can *enable* a flag when CLI is silent

@@ -49,7 +49,8 @@ extension BackplaneApplication {
     ///   - metadataProvider: Optional cross-cutting metadata source.
     ///     Evaluated on every log call. Defaults to `nil` (no extra
     ///     metadata).
-    ///   - logLevel: Default level applied to every handler this
+    ///   - logLevel: The table's base level
+    ///     (``BackplaneLogging/levelTable``) for every handler this
     ///     bootstrap produces. When `nil`, ``BackplaneLogging/resolveLogLevel(envVar:)``
     ///     reads the `LOG_LEVEL` env var; if that's also unset or unparseable,
     ///     `.info` is used.

@@ -22,8 +22,10 @@ from `1.0.0` onwards.
   an admin flow change verbosity without a restart.
 - `LevelTableLogHandler` wraps any `LogHandler`. Its `logLevel` getter
   prunes expired rules and returns the lowest level any live rule allows
-  for the label, cached per handler against the table's generation
-  (lock-free, two atomic loads per check). `log(event:)` then applies the
+  for the label, cached per handler against the table's generation. In
+  the steady state a check is a few atomic loads and no lock; it also
+  reads the clock while any live rule has an `expiresAt`, and takes the
+  lock once when a rule actually expires. `log(event:)` then applies the
   exact rule, using the subsystem from the message's or logger's metadata
   (`LogLevelTable.subsystemKeys`, default `["subsystem", "matter.subsystem"]`).
   It must be the outermost handler: never place it inside a
@@ -32,15 +34,20 @@ from `1.0.0` onwards.
   `BootstrapPlan.rejectedLogRules` (`[String]`, default `[]`). On the
   `apply` that installs logging, `BootstrapCoordinator` logs one warning
   per rejected entry: `Ignoring malformed logging rule '<text>'`. The
-  warning goes through the table, so the base level applies:
-  `--log-level error` hides it. If logging was already bootstrapped, the
+  warning is logged under label `backplane.logging` through the table,
+  so that label's level applies: normally the base level, so
+  `--log-level error` hides it, though a `backplane=…` rule can surface
+  it. If logging was already bootstrapped, the
   whole plan's logging configuration is skipped, rules and warnings
-  included.
+  included. The same applies when logging is bootstrapped elsewhere
+  first (for example `BackplaneOTel` with OTel logs enabled, or `main()`
+  calling `bootstrapLogging`): the table is never installed, so
+  `--log-rule` and `logging.rules` do nothing.
 - `LoggingOptions`: repeatable `--log-rule label[:subsystem]=level` (a
   malformed rule is a `validate()` error), the `logging.rules` config key
   (string array, lenient: malformed entries are skipped), and
   `resolvedLogRules` and `rejectedLogRules`. Config rules come before CLI
-  rules, and later rules win. Merge, then set both fields on the plan:
+  rules, and later rules win for the same label and subsystem. Merge, then set both fields on the plan:
   `plan.logRules = merged.resolvedLogRules` and
   `plan.rejectedLogRules = merged.rejectedLogRules`.
 
@@ -51,7 +58,9 @@ from `1.0.0` onwards.
   level instead of being assigned to each handler, so the default
   `installLogging` hook no longer sets `handler.logLevel`. A custom
   `installLogging` hook receives the already-wrapped factory, and its
-  level argument is informational only. With no rules, every logger
+  level argument is informational only. A custom hook must not set
+  `handler.logLevel = level`: that creates a per-instance floor which
+  stops rules lowering the level. With no rules, every logger
   reports and applies the same level as before.
 - Setting `logLevel` on a `Logger` built from the bootstrap is now a
   per-instance floor: it can make that logger quieter than the table,
