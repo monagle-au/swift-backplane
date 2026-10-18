@@ -99,7 +99,7 @@ public final class BootstrapCoordinator: Sendable {
             // set a per-instance floor and stop rules lowering the level.
             if let provider {
                 LoggingSystem.bootstrap(
-                    { label, _ in factory(label) },
+                    { label, provider in BootstrapCoordinator.handler(from: factory, label: label, metadataProvider: provider) },
                     metadataProvider: provider
                 )
             } else {
@@ -111,6 +111,19 @@ public final class BootstrapCoordinator: Sendable {
         self.installMetrics = installMetrics
         self.installLogging = installLogging
         self.state = Mutex(.init())
+    }
+
+    /// The handler the default `installLogging` hook builds for `label`:
+    /// `factory`'s handler, given `metadataProvider` when there is one.
+    @usableFromInline
+    static func handler(
+        from factory: LogHandlerFactory,
+        label: String,
+        metadataProvider: Logger.MetadataProvider?
+    ) -> any LogHandler {
+        var handler = factory(label)
+        if let metadataProvider { handler.metadataProvider = metadataProvider }
+        return handler
     }
 
     // MARK: - apply

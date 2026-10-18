@@ -358,6 +358,52 @@ struct BootstrapCoordinatorTests {
         #expect(second.all == ["debug after"])
     }
 
+    /// Renders "<message> <provider metadata>" so a test can see what the
+    /// handler's metadata provider supplied.
+    private struct ProviderSinkLogHandler: LogHandler {
+        let sink: Sink
+        var metadata: Logger.Metadata = [:]
+        var metadataProvider: Logger.MetadataProvider?
+        var logLevel: Logger.Level = .info
+
+        subscript(metadataKey key: String) -> Logger.Metadata.Value? {
+            get { metadata[key] }
+            set { metadata[key] = newValue }
+        }
+
+        func log(event: LogEvent) {
+            let provided = metadataProvider?.get() ?? [:]
+            let rendered = provided.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
+            sink.append((["\(event.message)"] + rendered).joined(separator: " "))
+        }
+    }
+
+    @Test("the default logging hook forwards the plan's metadata provider to the inner handler")
+    func defaultHookForwardsMetadataProvider() throws {
+        let sink = Sink()
+        let captured = Mutex<(factory: LogHandlerFactory, provider: Logger.MetadataProvider?)?>(nil)
+        let coordinator = BootstrapCoordinator(
+            installInstrument: { _ in },
+            installMetrics: { _ in },
+            installLogging: { factory, _, provider in captured.withLock { $0 = (factory, provider) } }
+        )
+        var plan = BootstrapPlan()
+        plan.levelTable = LogLevelTable()
+        plan.loggerMetadataProvider = Logger.MetadataProvider { ["request": "r1"] }
+        plan.logHandlerFactory = { _ in ProviderSinkLogHandler(sink: sink) }
+        coordinator.apply(plan)
+
+        let (factory, provider) = try #require(captured.withLock { $0 })
+        // The adapter the default hook hands to `LoggingSystem.bootstrap`.
+        let handler = BootstrapCoordinator.handler(from: factory, label: "matter.controller", metadataProvider: provider)
+        let table = try #require(handler as? LevelTableLogHandler)
+        #expect(table.wrapped.metadataProvider != nil)
+
+        let logger = Logger(label: "matter.controller") { _ in handler }
+        logger.info("hello")
+        #expect(sink.all == ["hello request=r1"])
+    }
+
     // MARK: - Process table
 
     /// The only test in the target that writes to

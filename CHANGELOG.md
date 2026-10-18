@@ -75,6 +75,15 @@ from `1.0.0` onwards.
 - The swift-log requirement is now `from: "1.11.0"` (for `LogEvent` and
   `LogHandler.log(event:)`).
 
+### Fixed
+
+- The default `installLogging` hook now hands `BootstrapPlan.loggerMetadataProvider`
+  to the handlers it builds. It bootstrapped `LoggingSystem` with the
+  provider but built each handler with `factory(label)`, discarding the
+  provider swift-log passes to the factory. Handlers that default their
+  provider to `nil`, such as `StructuredLogHandler` and `GCPLogHandler`,
+  never emitted the provider's metadata.
+
 ## [2.2.1] — 2026-10-03
 
 ### Fixed
