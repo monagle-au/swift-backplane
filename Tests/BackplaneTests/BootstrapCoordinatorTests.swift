@@ -43,6 +43,44 @@ struct BootstrapCoordinatorTests {
         )
     }
 
+    /// Captures the factory the coordinator hands to the logging hook.
+    private final class FactoryBox: Sendable {
+        private let factory = Mutex<LogHandlerFactory?>(nil)
+        func set(_ newValue: @escaping LogHandlerFactory) { factory.withLock { $0 = newValue } }
+        func make(_ label: String) -> (any LogHandler)? { factory.withLock { $0 }?(label) }
+    }
+
+    private func makeCapturingCoordinator(_ box: FactoryBox) -> BootstrapCoordinator {
+        BootstrapCoordinator(
+            installInstrument: { _ in },
+            installMetrics: { _ in },
+            installLogging: { factory, _, _ in box.set(factory) }
+        )
+    }
+
+    /// Collects "<level> <message>" for every event a handler receives.
+    private final class Sink: Sendable {
+        private let lines = Mutex<[String]>([])
+        func append(_ line: String) { lines.withLock { $0.append(line) } }
+        var all: [String] { lines.withLock { $0 } }
+    }
+
+    private struct CapturingLogHandler: LogHandler {
+        let sink: Sink
+        var metadata: Logger.Metadata = [:]
+        var metadataProvider: Logger.MetadataProvider?
+        var logLevel: Logger.Level = .info
+
+        subscript(metadataKey key: String) -> Logger.Metadata.Value? {
+            get { metadata[key] }
+            set { metadata[key] = newValue }
+        }
+
+        func log(event: LogEvent) {
+            sink.append("\(event.level.rawValue) \(event.message)")
+        }
+    }
+
     // MARK: - Empty plan
 
     @Test("Empty plan is a no-op")
@@ -212,5 +250,124 @@ struct BootstrapCoordinatorTests {
         coordinator.apply(plan)
 
         #expect(log.snapshot[0] == "logging:warning:no-provider")
+    }
+
+    // MARK: - Level table
+
+    @Test("the logging hook receives a factory wrapped in LevelTableLogHandler over the plan's table")
+    func loggingFactoryIsWrapped() throws {
+        let box = FactoryBox()
+        let coordinator = makeCapturingCoordinator(box)
+        let table = LogLevelTable()
+        var plan = BootstrapPlan()
+        plan.logLevel = .notice
+        plan.logRules = [LogLevelRule(labelPrefix: "acumen.agent", level: .trace)]
+        plan.levelTable = table
+        plan.logHandlerFactory = { label in StreamLogHandler.standardOutput(label: label) }
+        coordinator.apply(plan)
+
+        let handler = try #require(box.make("acumen.agent.matter-agent") as? LevelTableLogHandler)
+        #expect(handler.table === table)
+        #expect(handler.wrapped is StreamLogHandler)
+        #expect(table.baseLevel == .notice)
+        #expect(table.rules() == plan.logRules)
+        #expect(table.snapshot().configuredRules == plan.logRules)
+        #expect(handler.logLevel == .trace)
+        #expect(box.make("other")?.logLevel == .notice)
+    }
+
+    @Test("the resolved level is the table's base level, not a per-handler floor")
+    func resolvedLevelIsNotAFloor() throws {
+        let box = FactoryBox()
+        let coordinator = makeCapturingCoordinator(box)
+        let table = LogLevelTable()
+        var plan = BootstrapPlan()
+        plan.logLevel = .info
+        plan.levelTable = table
+        coordinator.apply(plan)
+
+        let handler = try #require(box.make("matter.controller"))
+        #expect(handler.logLevel == .info)
+        table.set(LogLevelRule(labelPrefix: "matter", level: .trace))
+        #expect(handler.logLevel == .trace)
+    }
+
+    @Test("a plan with only logRules bootstraps logging")
+    func logRulesAloneBootstrapLogging() {
+        let log = CallLog()
+        let coordinator = makeCoordinator(log: log)
+        let table = LogLevelTable()
+        var plan = BootstrapPlan()
+        plan.logRules = [LogLevelRule(labelPrefix: "cloud", level: .debug)]
+        plan.levelTable = table
+        #expect(plan.isEmpty == false)
+        #expect(plan.hasLoggingConfiguration == true)
+        coordinator.apply(plan)
+
+        #expect(log.snapshot.count == 1)
+        #expect(log.snapshot[0].hasPrefix("logging:"))
+        #expect(table.rules() == plan.logRules)
+    }
+
+    @Test("a plan with only a levelTable is still empty")
+    func levelTableAloneIsEmpty() {
+        var plan = BootstrapPlan()
+        plan.levelTable = LogLevelTable()
+        #expect(plan.isEmpty)
+        #expect(plan.hasLoggingConfiguration == false)
+    }
+
+    @Test("a multiplexed factory is wrapped outermost, so a runtime rule reaches the logger")
+    func multiplexFactoryWrappedOutermost() throws {
+        let box = FactoryBox()
+        let coordinator = makeCapturingCoordinator(box)
+        let table = LogLevelTable()
+        let first = Sink()
+        let second = Sink()
+        var plan = BootstrapPlan()
+        plan.logLevel = .notice
+        plan.levelTable = table
+        plan.logHandlerFactory = { _ in
+            MultiplexLogHandler([
+                CapturingLogHandler(sink: first),
+                CapturingLogHandler(sink: second),
+            ])
+        }
+        coordinator.apply(plan)
+
+        let logger = Logger(label: "matter.controller") { label in
+            box.make(label) ?? SwiftLogNoOpLogHandler()
+        }
+        #expect(logger.logLevel == .notice)
+        logger.debug("before")
+
+        table.set(LogLevelRule(labelPrefix: "matter", level: .trace))
+        #expect(logger.logLevel == .trace)
+        logger.debug("after")
+
+        #expect(first.all == ["debug after"])
+        #expect(second.all == ["debug after"])
+    }
+
+    // MARK: - Process table
+
+    /// The one test that deliberately touches ``BackplaneLogging/levelTable``.
+    /// It restores the table's base level and configured rules on exit.
+    @Suite("BootstrapCoordinator process table", .serialized)
+    struct ProcessTable {
+        @Test("without plan.levelTable the process table is used")
+        func defaultsToProcessTable() throws {
+            let shared = BackplaneLogging.levelTable
+            let saved = shared.snapshot()
+            defer { shared.install(baseLevel: saved.baseLevel, configuredRules: saved.configuredRules) }
+
+            let box = FactoryBox()
+            let coordinator = BootstrapCoordinatorTests().makeCapturingCoordinator(box)
+            var plan = BootstrapPlan()
+            plan.logHandlerFactory = { _ in SwiftLogNoOpLogHandler() }
+            coordinator.apply(plan)
+            let handler = try #require(box.make("x") as? LevelTableLogHandler)
+            #expect(handler.table === BackplaneLogging.levelTable)
+        }
     }
 }
