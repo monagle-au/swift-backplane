@@ -30,7 +30,9 @@ from `1.0.0` onwards.
   reads the clock while any live rule has an `expiresAt`, and takes the
   lock once when a rule actually expires. `log(event:)` then applies the
   exact rule, using the subsystem from the message's or logger's metadata
-  (`LogLevelTable.subsystemKeys`, default `["subsystem", "matter.subsystem"]`).
+  (`LogLevelTable.subsystemKeys`, default `["subsystem", "matter.subsystem"]`);
+  for a label whose level depends on subsystem, that takes the lock for
+  every message that passed the check.
   It must be the outermost handler: never place it inside a
   `MultiplexLogHandler`, which records its level once.
 - `BootstrapPlan.logRules`, `BootstrapPlan.levelTable` and

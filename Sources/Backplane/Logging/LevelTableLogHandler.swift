@@ -19,6 +19,12 @@ import Synchronization
 ///   subsystem: the first of ``LogLevelTable/subsystemKeys`` found in the
 ///   message's metadata, else in the logger's metadata
 ///   (`logger[metadataKey:]`). Metadata-provider values are not consulted.
+///   When the label's level depends on subsystem, this takes the table
+///   lock for every message that passed the `logLevel` check.
+/// - Because the getter returns the lowest level any rule allows, once a
+///   `label:<sub>=trace` rule is live every trace and debug call from
+///   loggers under that label is built and reaches ``log(event:)``, which
+///   then rejects those for any other subsystem.
 /// - Setting `logLevel` on a logger records a per-instance floor: the
 ///   effective minimum is the higher of the floor and the table's level.
 ///   A logger can make itself quieter than the table, never louder.
@@ -26,6 +32,11 @@ import Synchronization
 /// The wrapped handler's own `logLevel` is set to `.trace` at
 /// construction, so a filtering inner handler (e.g. a
 /// `MultiplexLogHandler` child) does not re-filter what the table admitted.
+///
+/// This handler must be the outermost wrapper. Never place it inside a
+/// `MultiplexLogHandler`: the multiplex records its level once, at
+/// construction, so a runtime ``LogLevelTable/set(_:)`` would silently do
+/// nothing. Wrap the multiplex instead.
 public struct LevelTableLogHandler: LogHandler {
 
     public let label: String
