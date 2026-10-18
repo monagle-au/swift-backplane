@@ -246,6 +246,23 @@ struct LogLevelTableTests {
         #expect(table.generation == g)
     }
 
+    @Test("a NaN expiresAt never expires and does not stop other rules being pruned")
+    func nanExpiryDoesNotBlockPruning() {
+        let clock = TestClock()
+        let table = LogLevelTable(baseLevel: .info, now: { clock.now })
+        // The longer prefix sorts the NaN rule first, where an unfiltered
+        // `min()` would keep it and report nothing due.
+        table.set(LogLevelRule(labelPrefix: "never-expiring", level: .trace, expiresAt: Date(timeIntervalSince1970: .nan)))
+        table.set(LogLevelRule(labelPrefix: "short", level: .debug, expiresAt: clock.now.addingTimeInterval(5)))
+        clock.advance(6)
+        let g = table.generation
+        table.pruneIfDue()
+        #expect(table.generation > g)
+        #expect(table.labelEntry(for: "short").entry.level == .info)
+        #expect(table.rules().map(\.labelPrefix) == ["never-expiring"])
+        #expect(table.level(for: "never-expiring.x", subsystem: nil) == .trace)
+    }
+
     // MARK: - Subsystem keys
 
     @Test("default subsystem keys are subsystem and matter.subsystem")

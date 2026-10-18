@@ -87,10 +87,13 @@ public struct LogLevelRule: Sendable, Hashable, Codable, CustomStringConvertible
         self.init(labelPrefix: label, subsystem: subsystem, level: level)
     }
 
-    /// `true` once `date` has reached ``expiresAt``.
+    /// `true` once `date` has reached ``expiresAt``. A NaN ``expiresAt``
+    /// never expires.
     public func isExpired(at date: Date) -> Bool {
         guard let expiresAt else { return false }
-        return expiresAt <= date
+        // Compare the doubles: `Date`'s derived `<=` is `!(date < expiresAt)`,
+        // which is true for NaN and would expire the rule on arrival.
+        return expiresAt.timeIntervalSince1970 <= date.timeIntervalSince1970
     }
 
     /// The rule in `label[:subsystem]=level` form. ``expiresAt`` is not part

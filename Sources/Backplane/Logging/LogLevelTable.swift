@@ -259,7 +259,11 @@ public final class LogLevelTable: Sendable {
         let before = state.rules.count
         state.rules.removeAll { $0.isExpired(at: date) }
         let removed = state.rules.count != before
-        let next = state.rules.compactMap(\.expiresAt).min()
+        // A NaN `expiresAt` never expires; left in, it would make `min()`
+        // order-dependent and could park the watermark at "nothing due".
+        let next = state.rules.compactMap(\.expiresAt)
+            .filter { $0.timeIntervalSince1970.isFinite }
+            .min()
         nextExpiryMillis.store(next.map(Self.ceilingMillis) ?? .max, ordering: .releasing)
         if removed { bumpGenerationLocked() }
         return removed
