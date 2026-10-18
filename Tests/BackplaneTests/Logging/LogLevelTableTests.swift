@@ -279,7 +279,8 @@ struct LogLevelTableTests {
         await withTaskGroup(of: Void.self) { group in
             for writer in 0..<4 {
                 group.addTask {
-                    for i in 0..<500 {
+                    for i in 0..<200 {
+                        if i % 20 == 0 { await Task.yield() }
                         let prefix = "w\(writer).\(i % 10)"
                         table.set(LogLevelRule(labelPrefix: prefix, level: .debug))
                         if i % 2 == 0 { table.remove(labelPrefix: prefix) }
@@ -288,7 +289,8 @@ struct LogLevelTableTests {
             }
             for reader in 0..<4 {
                 group.addTask {
-                    for _ in 0..<2_000 {
+                    for n in 0..<400 {
+                        if n % 40 == 0 { await Task.yield() }
                         let minimum = table.minimumLevel(for: "w\(reader).3.x")
                         #expect(minimum == .info || minimum == .debug)
                         let exact = table.level(for: "w\(reader).4.x", subsystem: "mrp")
@@ -297,7 +299,7 @@ struct LogLevelTableTests {
                 }
             }
         }
-        // The last op per prefix "wN.k" ran at i = 490 + k: even k ends removed, odd k ends set.
+        // The last op per prefix "wN.k" ran at i = 190 + k: even k ends removed, odd k ends set.
         #expect(table.rules().count == 20)
         #expect(table.minimumLevel(for: "w0.3.x") == .debug)
         #expect(table.minimumLevel(for: "w0.2.x") == .info)

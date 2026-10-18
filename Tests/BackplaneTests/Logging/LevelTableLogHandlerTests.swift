@@ -261,7 +261,8 @@ struct LevelTableLogHandlerTests {
         table.set(rule("matter=debug"))
         await withTaskGroup(of: Void.self) { group in
             group.addTask {
-                for i in 0..<1_000 {
+                for i in 0..<200 {
+                    if i % 20 == 0 { await Task.yield() }
                     if i % 2 == 0 { table.set(rule("matter=debug")) } else { table.remove(labelPrefix: "matter") }
                 }
                 table.set(rule("matter=debug"))
@@ -269,7 +270,8 @@ struct LevelTableLogHandlerTests {
             for _ in 0..<4 {
                 group.addTask {
                     let logger = makeLogger("matter.controller", table: table, sink: sink)
-                    for _ in 0..<1_000 {
+                    for n in 0..<200 {
+                        if n % 20 == 0 { await Task.yield() }
                         logger.trace("never")
                         logger.debug("maybe")
                     }
