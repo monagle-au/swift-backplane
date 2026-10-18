@@ -164,13 +164,33 @@ struct LevelTableLogHandlerTests {
 
         logger.trace("before")
         clock.advance(61)
+        // Before any log call: only the getter's own prune can have dropped the rule.
+        #expect(logger.logLevel == .info)
         logger.trace("after")
         logger.debug("after-debug")
         logger.info("after-info")
 
         #expect(sink.all == ["trace before", "info after-info"])
-        #expect(logger.logLevel == .info)
         #expect(table.rules().isEmpty)
+    }
+
+    @Test("log(event:) prunes an expired rule itself, without the getter being read first")
+    func expiryThroughLogEvent() {
+        let sink = Sink()
+        let clock = TestClock()
+        let table = LogLevelTable(baseLevel: .info, now: { clock.now })
+        table.set(LogLevelRule(labelPrefix: "matter", level: .trace, expiresAt: clock.now.addingTimeInterval(60)))
+        let handler = LevelTableLogHandler(label: "matter.controller", wrapping: CapturingLogHandler(sink: sink), table: table)
+        // Prime the cache while the rule is live, then expire it.
+        #expect(handler.logLevel == .trace)
+        clock.advance(61)
+        for (level, message) in [(Logger.Level.trace, "after-trace"), (.info, "after-info")] {
+            handler.log(event: LogEvent(
+                level: level, message: "\(message)", metadata: nil,
+                source: "test", file: #fileID, function: #function, line: #line
+            ))
+        }
+        #expect(sink.all == ["info after-info"])
     }
 
     @Test("the inner handler is opened to trace, so a Multiplex child does not re-filter")
