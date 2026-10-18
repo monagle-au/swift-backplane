@@ -11,7 +11,7 @@ import Synchronization
 import Testing
 import Tracing
 
-@Suite("BootstrapCoordinator")
+@Suite("BootstrapCoordinator", .serialized)
 struct BootstrapCoordinatorTests {
 
     // MARK: - Test doubles
@@ -58,29 +58,6 @@ struct BootstrapCoordinatorTests {
         )
     }
 
-    /// Collects "<level> <message>" for every event a handler receives.
-    private final class Sink: Sendable {
-        private let lines = Mutex<[String]>([])
-        func append(_ line: String) { lines.withLock { $0.append(line) } }
-        var all: [String] { lines.withLock { $0 } }
-    }
-
-    private struct CapturingLogHandler: LogHandler {
-        let sink: Sink
-        var metadata: Logger.Metadata = [:]
-        var metadataProvider: Logger.MetadataProvider?
-        var logLevel: Logger.Level = .info
-
-        subscript(metadataKey key: String) -> Logger.Metadata.Value? {
-            get { metadata[key] }
-            set { metadata[key] = newValue }
-        }
-
-        func log(event: LogEvent) {
-            sink.append("\(event.level.rawValue) \(event.message)")
-        }
-    }
-
     // MARK: - Empty plan
 
     @Test("Empty plan is a no-op")
@@ -96,6 +73,7 @@ struct BootstrapCoordinatorTests {
         // A subsequent non-empty plan still works.
         var plan = BootstrapPlan()
         plan.logLevel = .debug
+        plan.levelTable = LogLevelTable()
         coordinator.apply(plan)
         #expect(coordinator.hasBootstrappedLogging == true)
     }
@@ -112,6 +90,7 @@ struct BootstrapCoordinatorTests {
         plan.metricsFactory = NOOPMetricsHandler.instance
         plan.logHandlerFactory = { label in StreamLogHandler.standardOutput(label: label) }
         plan.logLevel = .info
+        plan.levelTable = LogLevelTable()
 
         coordinator.apply(plan)
 
@@ -144,6 +123,7 @@ struct BootstrapCoordinatorTests {
         let coordinator = makeCoordinator(log: log)
         var plan = BootstrapPlan()
         plan.logLevel = .debug
+        plan.levelTable = LogLevelTable()
         coordinator.apply(plan)
 
         #expect(log.snapshot.count == 1)
@@ -156,6 +136,7 @@ struct BootstrapCoordinatorTests {
         let coordinator = makeCoordinator(log: log)
         var plan = BootstrapPlan()
         plan.loggerMetadataProvider = Logger.MetadataProvider { [:] }
+        plan.levelTable = LogLevelTable()
         coordinator.apply(plan)
 
         #expect(log.snapshot.count == 1)
@@ -171,12 +152,14 @@ struct BootstrapCoordinatorTests {
 
         var first = BootstrapPlan()
         first.logLevel = .info
+        first.levelTable = LogLevelTable()
         coordinator.apply(first)
         #expect(log.snapshot.count == 1)
 
         // Second apply with logging again — idempotent, no second install.
         var second = BootstrapPlan()
         second.logLevel = .debug
+        second.levelTable = LogLevelTable()
         coordinator.apply(second)
         #expect(log.snapshot.count == 1)
     }
@@ -189,6 +172,7 @@ struct BootstrapCoordinatorTests {
         // First plan: logging only.
         var first = BootstrapPlan()
         first.logLevel = .info
+        first.levelTable = LogLevelTable()
         coordinator.apply(first)
         #expect(log.snapshot.count == 1)
         #expect(log.snapshot[0].hasPrefix("logging:"))
@@ -214,6 +198,7 @@ struct BootstrapCoordinatorTests {
 
         var plan = BootstrapPlan()
         plan.logLevel = .debug
+        plan.levelTable = LogLevelTable()
         plan.instrument = NoOpTracer()
         coordinator.apply(plan)
 
@@ -232,6 +217,7 @@ struct BootstrapCoordinatorTests {
         var plan = BootstrapPlan()
         plan.instrument = NoOpTracer()
         plan.logLevel = .info
+        plan.levelTable = LogLevelTable()
         coordinator.apply(plan)
 
         // Tracing already marked — only logging fires.
@@ -247,6 +233,7 @@ struct BootstrapCoordinatorTests {
         let coordinator = makeCoordinator(log: log)
         var plan = BootstrapPlan()
         plan.logLevel = .warning
+        plan.levelTable = LogLevelTable()
         coordinator.apply(plan)
 
         #expect(log.snapshot[0] == "logging:warning:no-provider")
@@ -329,8 +316,8 @@ struct BootstrapCoordinatorTests {
         plan.levelTable = table
         plan.logHandlerFactory = { _ in
             MultiplexLogHandler([
-                CapturingLogHandler(sink: first),
-                CapturingLogHandler(sink: second),
+                SinkLogHandler(sink: first),
+                SinkLogHandler(sink: second),
             ])
         }
         coordinator.apply(plan)
@@ -351,23 +338,26 @@ struct BootstrapCoordinatorTests {
 
     // MARK: - Process table
 
-    /// The one test that deliberately touches ``BackplaneLogging/levelTable``.
-    /// It restores the table's base level and configured rules on exit.
-    @Suite("BootstrapCoordinator process table", .serialized)
-    struct ProcessTable {
-        @Test("without plan.levelTable the process table is used")
-        func defaultsToProcessTable() throws {
-            let shared = BackplaneLogging.levelTable
-            let saved = shared.snapshot()
-            defer { shared.install(baseLevel: saved.baseLevel, configuredRules: saved.configuredRules) }
+    /// The only test in the target that writes to
+    /// ``BackplaneLogging/levelTable``; every other plan here that
+    /// bootstraps logging injects its own table. The suite is `.serialized`,
+    /// so the snapshot and restore bracket this test against its siblings
+    /// (other suites still run in parallel, but only read the shared
+    /// table's identity).
+    @Test("without plan.levelTable the process table is used")
+    func defaultsToProcessTable() throws {
+        let shared = BackplaneLogging.levelTable
+        let saved = shared.snapshot()
+        // `install` restores the base level and configured rules only;
+        // runtime rules set on the shared table are not restored.
+        defer { shared.install(baseLevel: saved.baseLevel, configuredRules: saved.configuredRules) }
 
-            let box = FactoryBox()
-            let coordinator = BootstrapCoordinatorTests().makeCapturingCoordinator(box)
-            var plan = BootstrapPlan()
-            plan.logHandlerFactory = { _ in SwiftLogNoOpLogHandler() }
-            coordinator.apply(plan)
-            let handler = try #require(box.make("x") as? LevelTableLogHandler)
-            #expect(handler.table === BackplaneLogging.levelTable)
-        }
+        let box = FactoryBox()
+        let coordinator = makeCapturingCoordinator(box)
+        var plan = BootstrapPlan()
+        plan.logHandlerFactory = { _ in SwiftLogNoOpLogHandler() }
+        coordinator.apply(plan)
+        let handler = try #require(box.make("x") as? LevelTableLogHandler)
+        #expect(handler.table === BackplaneLogging.levelTable)
     }
 }

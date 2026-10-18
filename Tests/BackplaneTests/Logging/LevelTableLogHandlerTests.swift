@@ -5,36 +5,12 @@
 
 import Foundation
 import Logging
-import Synchronization
 import Testing
 @testable import Backplane
 
-/// Collects "<level> <message>" for every event that reaches the inner handler.
-private final class Sink: Sendable {
-    private let lines = Mutex<[String]>([])
-    func append(_ line: String) { lines.withLock { $0.append(line) } }
-    var all: [String] { lines.withLock { $0 } }
-}
-
-private struct CapturingLogHandler: LogHandler {
-    let sink: Sink
-    var metadata: Logger.Metadata = [:]
-    var metadataProvider: Logger.MetadataProvider?
-    var logLevel: Logger.Level = .info
-
-    subscript(metadataKey key: String) -> Logger.Metadata.Value? {
-        get { metadata[key] }
-        set { metadata[key] = newValue }
-    }
-
-    func log(event: LogEvent) {
-        sink.append("\(event.level.rawValue) \(event.message)")
-    }
-}
-
 private func makeLogger(_ label: String, table: LogLevelTable, sink: Sink) -> Logger {
     Logger(label: label) { label in
-        LevelTableLogHandler(label: label, wrapping: CapturingLogHandler(sink: sink), table: table)
+        LevelTableLogHandler(label: label, wrapping: SinkLogHandler(sink: sink), table: table)
     }
 }
 
@@ -121,7 +97,7 @@ struct LevelTableLogHandlerTests {
     func floorWithSubsystem() {
         let sink = Sink()
         let table = LogLevelTable(baseLevel: .info, rules: [rule("matter:mrp=trace")])
-        var handler = LevelTableLogHandler(label: "matter.controller", wrapping: CapturingLogHandler(sink: sink), table: table)
+        var handler = LevelTableLogHandler(label: "matter.controller", wrapping: SinkLogHandler(sink: sink), table: table)
         handler.logLevel = .debug
         // Drive log(event:) directly: Logger would filter on the getter first.
         for (level, message) in [(Logger.Level.trace, "trace-mrp"), (.debug, "debug-mrp")] {
@@ -180,7 +156,7 @@ struct LevelTableLogHandlerTests {
         let clock = TestClock()
         let table = LogLevelTable(baseLevel: .info, now: { clock.now })
         table.set(LogLevelRule(labelPrefix: "matter", level: .trace, expiresAt: clock.now.addingTimeInterval(60)))
-        let handler = LevelTableLogHandler(label: "matter.controller", wrapping: CapturingLogHandler(sink: sink), table: table)
+        let handler = LevelTableLogHandler(label: "matter.controller", wrapping: SinkLogHandler(sink: sink), table: table)
         // Prime the cache while the rule is live, then expire it.
         #expect(handler.logLevel == .trace)
         clock.advance(61)
@@ -200,7 +176,7 @@ struct LevelTableLogHandlerTests {
         let logger = Logger(label: "acumen.engine") { label in
             LevelTableLogHandler(
                 label: label,
-                wrapping: MultiplexLogHandler([CapturingLogHandler(sink: sink, logLevel: .info)]),
+                wrapping: MultiplexLogHandler([SinkLogHandler(sink: sink, logLevel: .info)]),
                 table: table
             )
         }
@@ -227,7 +203,7 @@ struct LevelTableLogHandlerTests {
     @Test("metadata and metadataProvider forward to the inner handler")
     func metadataForwarding() {
         let table = LogLevelTable()
-        var handler = LevelTableLogHandler(label: "x", wrapping: CapturingLogHandler(sink: Sink()), table: table)
+        var handler = LevelTableLogHandler(label: "x", wrapping: SinkLogHandler(sink: Sink()), table: table)
         handler[metadataKey: "a"] = "1"
         handler.metadata["b"] = "2"
         handler.metadataProvider = Logger.MetadataProvider { ["c": "3"] }

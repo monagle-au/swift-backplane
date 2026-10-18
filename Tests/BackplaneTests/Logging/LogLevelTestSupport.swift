@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import Logging
 import Synchronization
 @testable import Backplane
 
@@ -18,4 +19,27 @@ final class TestClock: Sendable {
 func rule(_ text: String) -> LogLevelRule {
     // Test literals are well-formed; a failure here is a test bug.
     try! LogLevelRule(parsing: text)
+}
+
+/// Collects "<level> <message>" for every event that reaches the inner handler.
+final class Sink: Sendable {
+    private let lines = Mutex<[String]>([])
+    func append(_ line: String) { lines.withLock { $0.append(line) } }
+    var all: [String] { lines.withLock { $0 } }
+}
+
+struct SinkLogHandler: LogHandler {
+    let sink: Sink
+    var metadata: Logger.Metadata = [:]
+    var metadataProvider: Logger.MetadataProvider?
+    var logLevel: Logger.Level = .info
+
+    subscript(metadataKey key: String) -> Logger.Metadata.Value? {
+        get { metadata[key] }
+        set { metadata[key] = newValue }
+    }
+
+    func log(event: LogEvent) {
+        sink.append("\(event.level.rawValue) \(event.message)")
+    }
 }
