@@ -8,6 +8,57 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+### Added
+
+- **Runtime log levels.** `LogLevelTable` holds a base level plus
+  `LogLevelRule(labelPrefix:subsystem:level:expiresAt:)` rules. The
+  longest matching label prefix wins, and at equal prefixes a rule for
+  the message's subsystem beats an any-subsystem rule (`nil` or `"*"`;
+  `LogLevelRule` decodes `*` to `nil`). Expired rules are ignored and
+  pruned. Expiry is converted to milliseconds with saturation, so a
+  far-future `expiresAt` cannot trap. `BackplaneLogging.levelTable` is
+  the process's table. `set(_:)`, `remove(labelPrefix:subsystem:)`,
+  `reset()` (back to the configured rules), `rules()` and `snapshot()` let
+  an admin flow change verbosity without a restart.
+- `LevelTableLogHandler` wraps any `LogHandler`. Its `logLevel` getter
+  prunes expired rules and returns the lowest level any live rule allows
+  for the label, cached per handler against the table's generation
+  (lock-free, two atomic loads per check). `log(event:)` then applies the
+  exact rule, using the subsystem from the message's or logger's metadata
+  (`LogLevelTable.subsystemKeys`, default `["subsystem", "matter.subsystem"]`).
+  It must be the outermost handler: never place it inside a
+  `MultiplexLogHandler`, which records its level once.
+- `BootstrapPlan.logRules`, `BootstrapPlan.levelTable` and
+  `BootstrapPlan.rejectedLogRules` (`[String]`, default `[]`). On the
+  `apply` that installs logging, `BootstrapCoordinator` logs one warning
+  per rejected entry: `Ignoring malformed logging rule '<text>'`. The
+  warning goes through the table, so the base level applies:
+  `--log-level error` hides it. If logging was already bootstrapped, the
+  whole plan's logging configuration is skipped, rules and warnings
+  included.
+- `LoggingOptions`: repeatable `--log-rule label[:subsystem]=level` (a
+  malformed rule is a `validate()` error), the `logging.rules` config key
+  (string array, lenient: malformed entries are skipped), and
+  `resolvedLogRules` and `rejectedLogRules`. Config rules come before CLI
+  rules, and later rules win. Merge, then set both fields on the plan:
+  `plan.logRules = merged.resolvedLogRules` and
+  `plan.rejectedLogRules = merged.rejectedLogRules`.
+
+### Changed
+
+- `BootstrapCoordinator` now wraps every handler factory it installs in
+  `LevelTableLogHandler`. The resolved level becomes the table's base
+  level instead of being assigned to each handler, so the default
+  `installLogging` hook no longer sets `handler.logLevel`. A custom
+  `installLogging` hook receives the already-wrapped factory, and its
+  level argument is informational only. With no rules, every logger
+  reports and applies the same level as before.
+- Setting `logLevel` on a `Logger` built from the bootstrap is now a
+  per-instance floor: it can make that logger quieter than the table,
+  never louder. Use a rule to make a label more verbose.
+- The swift-log requirement is now `from: "1.11.0"` (for `LogEvent` and
+  `LogHandler.log(event:)`).
+
 ## [2.2.1] — 2026-10-03
 
 ### Fixed
