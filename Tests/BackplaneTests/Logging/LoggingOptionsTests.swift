@@ -198,6 +198,7 @@ struct LoggingOptionsTests {
         let opts = try LoggingOptions.parse([])
         let config = makeArrayConfig(["logging.rules": ["cloud=debug", "", "  "]])
         let merged = opts.merging(from: config.scoped(to: "logging"))
+        #expect(merged.logRules.count == 3)
         #expect(merged.rejectedLogRules.isEmpty)
         #expect(merged.resolvedLogRules == [LogLevelRule(labelPrefix: "cloud", level: .debug)])
     }
