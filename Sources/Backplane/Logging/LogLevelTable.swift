@@ -102,6 +102,8 @@ public final class LogLevelTable: Sendable {
     private let generationCounter = Atomic<UInt64>(1)
     /// Earliest live `expiresAt`, as ceiling milliseconds since 1970; `.max` when none.
     private let nextExpiryMillis = Atomic<Int64>(.max)
+    /// Set by the first ``LevelTableLogHandler`` built over this table.
+    private let consulted = Atomic<Bool>(false)
     /// Number of label-entry computations; read by tests to prove the cache holds.
     private let entryComputations = Atomic<Int>(0)
     private let now: @Sendable () -> Date
@@ -127,6 +129,17 @@ public final class LogLevelTable: Sendable {
     /// Increases on every change, including the pruning of an expired rule.
     public var generation: UInt64 {
         generationCounter.load(ordering: .acquiring)
+    }
+
+    /// Whether any ``LevelTableLogHandler`` has been built over this table.
+    ///
+    /// An admin flow can check this before offering to change levels:
+    /// when it is `false`, rules and ``set(_:)`` take no effect. It is
+    /// `false` when logging was bootstrapped directly through
+    /// `LoggingSystem.bootstrap`, or by swift-otel when OTel logs are
+    /// enabled, rather than through ``BootstrapCoordinator``.
+    public var isConsulted: Bool {
+        consulted.load(ordering: .relaxed)
     }
 
     /// The level used when no rule matches.
@@ -231,6 +244,11 @@ public final class LogLevelTable: Sendable {
         state.withLock { state in
             _ = pruneLocked(&state, at: date)
         }
+    }
+
+    /// Record that a handler reads this table. Called by ``LevelTableLogHandler``.
+    func markConsulted() {
+        consulted.store(true, ordering: .relaxed)
     }
 
     var entryComputationCount: Int {

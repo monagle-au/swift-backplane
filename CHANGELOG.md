@@ -19,7 +19,10 @@ from `1.0.0` onwards.
   far-future `expiresAt` cannot trap. `BackplaneLogging.levelTable` is
   the process's table. `set(_:)`, `remove(labelPrefix:subsystem:)`,
   `reset()` (back to the configured rules), `rules()` and `snapshot()` let
-  an admin flow change verbosity without a restart.
+  an admin flow change verbosity without a restart. `isConsulted` is
+  `true` once a `LevelTableLogHandler` has been built over the table, so
+  an admin flow can tell that rules will take effect; it is `false` when
+  logging was bootstrapped directly or through OTel logs.
 - `LevelTableLogHandler` wraps any `LogHandler`. Its `logLevel` getter
   prunes expired rules and returns the lowest level any live rule allows
   for the label, cached per handler against the table's generation. In

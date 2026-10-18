@@ -73,6 +73,8 @@ coordinator logs one warning per entry of
   - **OTel logs enabled.** swift-otel bootstraps `LoggingSystem`
     itself, so no ``LevelTableLogHandler`` is in use. The table is not
     consulted at all: rules and runtime `set` do nothing.
+    ``LogLevelTable/isConsulted`` is `false` in this case, so an admin
+    flow can tell before offering a change.
   - **`main()` calls `bootstrapLogging` first.** That call goes through
     `apply`, so the table is installed with that call's base level and
     no rules. The command's later plan is skipped, so its `--log-rule`
@@ -92,6 +94,7 @@ table.set(LogLevelRule(
 table.rules()                                   // live rules, precedence order
 table.remove(labelPrefix: "acumen.agent.matter-agent")
 table.reset()                                   // back to the configured rules
+table.isConsulted                               // whether any handler reads the table
 ```
 
 Runtime rules are not persisted: a restart returns to the configured
@@ -130,6 +133,7 @@ the check from a label whose level depends on subsystem.
 ## Topics
 
 - ``LogLevelTable``
+- ``LogLevelTable/isConsulted``
 - ``LogLevelRule``
 - ``LevelTableLogHandler``
 - ``BackplaneLogging/levelTable``

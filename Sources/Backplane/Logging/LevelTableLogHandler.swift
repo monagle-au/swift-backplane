@@ -42,6 +42,7 @@ public struct LevelTableLogHandler: LogHandler {
     public init(label: String, wrapping handler: any LogHandler, table: LogLevelTable = BackplaneLogging.levelTable) {
         var inner = handler
         inner.logLevel = .trace
+        table.markConsulted()
         self.label = label
         self.table = table
         self.wrapped = inner

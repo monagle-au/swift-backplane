@@ -244,6 +244,14 @@ struct LevelTableLogHandlerTests {
         #expect(handler.table === BackplaneLogging.levelTable)
     }
 
+    @Test("isConsulted is false on a fresh table and true once a handler is built over it")
+    func isConsulted() {
+        let table = LogLevelTable()
+        #expect(table.isConsulted == false)
+        _ = LevelTableLogHandler(label: "x", wrapping: SwiftLogNoOpLogHandler(), table: table)
+        #expect(table.isConsulted)
+    }
+
     @Test("logging while rules change concurrently admits only permitted levels")
     func concurrentLogAndSet() async {
         let sink = Sink()
