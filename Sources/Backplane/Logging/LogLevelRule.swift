@@ -47,6 +47,18 @@ public struct LogLevelRule: Sendable, Hashable, Codable, CustomStringConvertible
         self.expiresAt = expiresAt
     }
 
+    /// Decodes through the designated `init`, so `"subsystem": "*"` is
+    /// normalised to `nil` like every other construction path.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            labelPrefix: try container.decode(String.self, forKey: .labelPrefix),
+            subsystem: try container.decodeIfPresent(String.self, forKey: .subsystem),
+            level: try container.decode(Logger.Level.self, forKey: .level),
+            expiresAt: try container.decodeIfPresent(Date.self, forKey: .expiresAt)
+        )
+    }
+
     /// Parse `label[:subsystem]=level`. Splits on the last `=`, then on the
     /// first `:` of the selector; trims whitespace; matches the level
     /// case-insensitively against `Logger.Level.rawValue`.
@@ -118,8 +130,8 @@ extension LogLevelRule {
 
     var identity: Identity { Identity(labelPrefix: labelPrefix, subsystem: subsystem) }
 
-    /// Re-applies `*` normalisation. Decoded rules bypass `init`, so the
-    /// table normalises everything it stores.
+    /// Re-applies `*` normalisation. Decoding and `init` already normalise;
+    /// this is a cheap belt-and-braces for the table, which stores rules.
     var normalized: LogLevelRule {
         LogLevelRule(labelPrefix: labelPrefix, subsystem: subsystem, level: level, expiresAt: expiresAt)
     }

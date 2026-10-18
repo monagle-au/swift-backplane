@@ -78,6 +78,14 @@ struct LogLevelRuleTests {
         #expect(try JSONDecoder().decode(LogLevelRule.self, from: data) == rule)
     }
 
+    @Test("decoding normalises subsystem * to nil")
+    func decodeNormalisesStar() throws {
+        let json = #"{"labelPrefix":"acumen","subsystem":"*","level":"debug"}"#
+        let rule = try JSONDecoder().decode(LogLevelRule.self, from: Data(json.utf8))
+        #expect(rule.subsystem == nil)
+        #expect(rule == LogLevelRule(labelPrefix: "acumen", level: .debug))
+    }
+
     @Test("isExpired is inclusive of expiresAt; nil never expires")
     func expiryPredicate() {
         let at = Date(timeIntervalSince1970: 1_800_000_000)
