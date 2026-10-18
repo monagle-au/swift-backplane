@@ -27,6 +27,17 @@ public typealias LogHandlerFactory = @Sendable (_ label: String) -> any LogHandl
 /// Cloud Logging integration.
 public enum BackplaneLogging {
 
+    // MARK: - Level table
+
+    /// The process's ``LogLevelTable``. ``BootstrapCoordinator`` installs
+    /// the bootstrap's base level and ``BootstrapPlan/logRules`` here
+    /// (unless the plan supplies ``BootstrapPlan/levelTable``) and wraps
+    /// every handler in a ``LevelTableLogHandler`` that consults it. Admin
+    /// flows change verbosity at runtime through its ``LogLevelTable/set(_:)``,
+    /// ``LogLevelTable/remove(labelPrefix:subsystem:)`` and
+    /// ``LogLevelTable/reset()``.
+    public static let levelTable = LogLevelTable()
+
     // MARK: - Stock factories
 
     /// swift-log's default stream output (stderr by default in
