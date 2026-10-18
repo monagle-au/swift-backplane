@@ -22,6 +22,7 @@ import Logging
 ///     func bootstrap(config: ConfigReader, environment: Environment) -> BootstrapPlan {
 ///         var plan = BootstrapPlan()
 ///         plan.logLevel = logging.resolvedLogLevel
+///         plan.logRules = logging.resolvedLogRules
 ///         plan.logHandlerFactory = logging.format.factory(default: BackplaneLogging.cloudRunOrStream.asFactory)
 ///         return plan
 ///     }
@@ -50,7 +51,39 @@ public struct LoggingOptions: ParsableArguments, Sendable {
     )
     public var format: LogFormat = .auto
 
+    /// Per-label level rules, `label[:subsystem]=level`, repeatable:
+    /// `--log-rule acumen.agent=debug --log-rule matter:mrp=trace`.
+    /// Subsystem `*` means any. Installed as the level table's configured
+    /// rules (see ``LogLevelTable``).
+    @Option(
+        name: .customLong("log-rule"),
+        help: ArgumentHelp(
+            "Per-label level rule, label[:subsystem]=level (subsystem * = any). Repeatable.",
+            valueName: "rule"
+        )
+    )
+    public var logRules: [String] = []
+
     public init() {}
+
+    /// Rejects a malformed `--log-rule` at parse time.
+    public mutating func validate() throws {
+        for raw in logRules {
+            do {
+                _ = try LogLevelRule(parsing: raw)
+            } catch {
+                throw ValidationError("Invalid --log-rule: \(error)")
+            }
+        }
+    }
+
+    /// ``logRules`` parsed into ``LogLevelRule``s, in order (later rules
+    /// win for the same label and subsystem). Malformed entries, which can
+    /// arrive only from config because ``validate()`` rejects them on the
+    /// command line, are dropped.
+    public var resolvedLogRules: [LogLevelRule] {
+        logRules.compactMap { try? LogLevelRule(parsing: $0) }
+    }
 
     /// Parse ``logLevel`` into a `Logger.Level`. Returns `nil` when the flag
     /// was not supplied or the value isn't recognised — the
@@ -70,14 +103,18 @@ public struct LoggingOptions: ParsableArguments, Sendable {
     /// Looks up these keys in the supplied scope (typical full keys
     /// after `config.scoped(to: "logging")`):
     ///
-    /// | Field      | Config key | Example env var      |
-    /// |------------|------------|----------------------|
-    /// | `logLevel` | `level`    | `LOGGING_LEVEL=debug`|
-    /// | `format`   | `format`   | `LOGGING_FORMAT=json`|
+    /// | Field      | Config key | Example env var                         |
+    /// |------------|------------|-----------------------------------------|
+    /// | `logLevel` | `level`    | `LOGGING_LEVEL=debug`                   |
+    /// | `format`   | `format`   | `LOGGING_FORMAT=json`                   |
+    /// | `logRules` | `rules`    | `LOGGING_RULES=cloud=debug,hap=warning` |
+    ///
+    /// `rules` is a string array. Config rules are placed *before* CLI
+    /// rules, so a `--log-rule` for the same label and subsystem wins.
     ///
     /// The exact env-var spelling depends on which `ConfigProvider`
     /// the app composes (e.g. `EnvironmentVariablesProvider`'s default
-    /// dotted-key mapping is uppercase + underscores).
+    /// dotted-key mapping is uppercase + underscores, arrays comma-separated).
     ///
     /// Use inside ``BackplaneCommand/bootstrap(config:environment:)``:
     ///
@@ -86,6 +123,7 @@ public struct LoggingOptions: ParsableArguments, Sendable {
     ///     let opts = logging.merging(from: config.scoped(to: "logging"))
     ///     var plan = BootstrapPlan()
     ///     plan.logLevel = opts.resolvedLogLevel
+    ///     plan.logRules = opts.resolvedLogRules
     ///     plan.logHandlerFactory = opts.format.factory(default: BackplaneLogging.cloudRunOrStream.asFactory)
     ///     return plan
     /// }
@@ -102,6 +140,9 @@ public struct LoggingOptions: ParsableArguments, Sendable {
            let parsed = LogFormat(rawValue: raw.lowercased())
         {
             copy.format = parsed
+        }
+        if let configured = config.stringArray(forKey: "rules"), !configured.isEmpty {
+            copy.logRules = configured + copy.logRules
         }
         return copy
     }

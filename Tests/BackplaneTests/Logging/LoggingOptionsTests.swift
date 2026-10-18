@@ -30,6 +30,16 @@ private func makeConfig(_ values: [String: String]) async -> ConfigReader {
     return ConfigReader(provider: InMemoryProvider(values: converted))
 }
 
+/// Build an in-memory `ConfigReader` whose values are string arrays.
+private func makeArrayConfig(_ values: [String: [String]]) -> ConfigReader {
+    var converted: [AbsoluteConfigKey: ConfigValue] = [:]
+    for (k, v) in values {
+        let key = AbsoluteConfigKey(k.split(separator: ".").map(String.init))
+        converted[key] = ConfigValue(.stringArray(v), isSecret: false)
+    }
+    return ConfigReader(provider: InMemoryProvider(values: converted))
+}
+
 @Suite("LoggingOptions")
 struct LoggingOptionsTests {
 
@@ -112,5 +122,65 @@ struct LoggingOptionsTests {
         let merged = opts.merging(from: config.scoped(to: "logging"))
         #expect(merged.resolvedLogLevel == nil)
         #expect(merged.format == .auto)
+    }
+
+    // MARK: - --log-rule / logging.rules
+
+    @Test("Defaults: no log rules")
+    func defaultLogRules() throws {
+        let opts = try LoggingOptions.parse([])
+        #expect(opts.logRules.isEmpty)
+        #expect(opts.resolvedLogRules.isEmpty)
+    }
+
+    @Test("--log-rule is repeatable and parses label[:subsystem]=level")
+    func logRuleRepeatable() throws {
+        let opts = try LoggingOptions.parse([
+            "--log-rule", "acumen.agent=debug",
+            "--log-rule", "acumen.agent.matter-agent:mrp=trace",
+        ])
+        #expect(opts.resolvedLogRules == [
+            LogLevelRule(labelPrefix: "acumen.agent", level: .debug),
+            LogLevelRule(labelPrefix: "acumen.agent.matter-agent", subsystem: "mrp", level: .trace),
+        ])
+    }
+
+    @Test("a malformed --log-rule is a validation error")
+    func logRuleMalformed() {
+        #expect(throws: (any Error).self) {
+            try LoggingOptions.parse(["--log-rule", "acumen"])
+        }
+        #expect(throws: (any Error).self) {
+            try LoggingOptions.parse(["--log-rule", "acumen=loud"])
+        }
+    }
+
+    @Test("merging prepends logging.rules from config; CLI rules come after and win per rule")
+    func mergingRules() throws {
+        let opts = try LoggingOptions.parse(["--log-rule", "acumen=trace"])
+        let config = makeArrayConfig(["logging.rules": ["acumen=debug", "hap-bridge=warning"]])
+        let merged = opts.merging(from: config.scoped(to: "logging"))
+        #expect(merged.logRules == ["acumen=debug", "hap-bridge=warning", "acumen=trace"])
+
+        let table = LogLevelTable(baseLevel: .info, rules: merged.resolvedLogRules)
+        #expect(table.level(for: "acumen.engine", subsystem: nil) == .trace)
+        #expect(table.level(for: "hap-bridge", subsystem: nil) == .warning)
+    }
+
+    @Test("merging takes logging.rules when CLI supplied none")
+    func mergingRulesFromConfigOnly() throws {
+        let opts = try LoggingOptions.parse([])
+        let config = makeArrayConfig(["logging.rules": ["cloud=debug"]])
+        let merged = opts.merging(from: config.scoped(to: "logging"))
+        #expect(merged.resolvedLogRules == [LogLevelRule(labelPrefix: "cloud", level: .debug)])
+    }
+
+    @Test("malformed config rules are dropped by resolvedLogRules")
+    func malformedConfigRulesDropped() throws {
+        let opts = try LoggingOptions.parse([])
+        let config = makeArrayConfig(["logging.rules": ["cloud=debug", "nonsense"]])
+        let merged = opts.merging(from: config.scoped(to: "logging"))
+        #expect(merged.logRules.count == 2)
+        #expect(merged.resolvedLogRules == [LogLevelRule(labelPrefix: "cloud", level: .debug)])
     }
 }
