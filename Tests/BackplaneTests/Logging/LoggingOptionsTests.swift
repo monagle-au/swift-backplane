@@ -183,4 +183,22 @@ struct LoggingOptionsTests {
         #expect(merged.logRules.count == 2)
         #expect(merged.resolvedLogRules == [LogLevelRule(labelPrefix: "cloud", level: .debug)])
     }
+
+    @Test("a malformed config rule is reported in rejectedLogRules and absent from resolvedLogRules")
+    func malformedRuleRejected() throws {
+        let opts = try LoggingOptions.parse([])
+        let config = makeArrayConfig(["logging.rules": ["cloud=debug", "acumen.agent=debg"]])
+        let merged = opts.merging(from: config.scoped(to: "logging"))
+        #expect(merged.rejectedLogRules == ["acumen.agent=debg"])
+        #expect(merged.resolvedLogRules == [LogLevelRule(labelPrefix: "cloud", level: .debug)])
+    }
+
+    @Test("empty and whitespace-only config rules are neither resolved nor rejected")
+    func emptyRulesIgnored() throws {
+        let opts = try LoggingOptions.parse([])
+        let config = makeArrayConfig(["logging.rules": ["cloud=debug", "", "  "]])
+        let merged = opts.merging(from: config.scoped(to: "logging"))
+        #expect(merged.rejectedLogRules.isEmpty)
+        #expect(merged.resolvedLogRules == [LogLevelRule(labelPrefix: "cloud", level: .debug)])
+    }
 }

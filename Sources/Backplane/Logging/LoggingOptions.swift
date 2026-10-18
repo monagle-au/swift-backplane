@@ -26,6 +26,11 @@ import Logging
 ///         plan.logHandlerFactory = logging.format.factory(default: BackplaneLogging.cloudRunOrStream.asFactory)
 ///         return plan
 ///     }
+///
+///     // After bootstrap, once a logger exists:
+///     // for text in logging.rejectedLogRules {
+///     //     logger.warning("Ignoring malformed logging rule '\(text)'")
+///     // }
 /// }
 /// ```
 ///
@@ -85,6 +90,18 @@ public struct LoggingOptions: ParsableArguments, Sendable {
         logRules.compactMap { try? LogLevelRule(parsing: $0) }
     }
 
+    /// The non-empty ``logRules`` entries that fail to parse, in order.
+    /// ``resolvedLogRules`` drops these leniently; log each one as a warning
+    /// after bootstrap so a typo such as `acumen.agent=debg` is not silent.
+    /// Empty and whitespace-only entries (a trailing comma in an env-var
+    /// list produces one) are skipped, not reported.
+    public var rejectedLogRules: [String] {
+        logRules.filter { raw in
+            !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && (try? LogLevelRule(parsing: raw)) == nil
+        }
+    }
+
     /// Parse ``logLevel`` into a `Logger.Level`. Returns `nil` when the flag
     /// was not supplied or the value isn't recognised — the
     /// ``BootstrapCoordinator`` then falls back to the `LOG_LEVEL` env var
@@ -126,6 +143,11 @@ public struct LoggingOptions: ParsableArguments, Sendable {
     ///     plan.logRules = opts.resolvedLogRules
     ///     plan.logHandlerFactory = opts.format.factory(default: BackplaneLogging.cloudRunOrStream.asFactory)
     ///     return plan
+    /// }
+    ///
+    /// // After bootstrap, once a logger exists:
+    /// for text in opts.rejectedLogRules {
+    ///     logger.warning("Ignoring malformed logging rule '\(text)'")
     /// }
     /// ```
     public func merging(from config: ConfigReader) -> LoggingOptions {
