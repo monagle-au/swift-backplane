@@ -235,6 +235,17 @@ struct LogLevelTableTests {
         #expect(table.rules().isEmpty)
     }
 
+    @Test("a far-future expiresAt neither traps nor expires")
+    func farFutureExpiry() {
+        let table = LogLevelTable(baseLevel: .info)
+        table.set(LogLevelRule(labelPrefix: "a", level: .trace, expiresAt: Date(timeIntervalSince1970: 1e300)))
+        #expect(table.rules().count == 1)
+        #expect(table.level(for: "a.x", subsystem: nil) == .trace)
+        let g = table.generation
+        table.pruneIfDue()
+        #expect(table.generation == g)
+    }
+
     // MARK: - Subsystem keys
 
     @Test("default subsystem keys are subsystem and matter.subsystem")

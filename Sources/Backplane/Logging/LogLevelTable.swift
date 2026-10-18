@@ -306,11 +306,20 @@ public final class LogLevelTable: Sendable {
     }
 
     private static func ceilingMillis(_ date: Date) -> Int64 {
-        Int64((date.timeIntervalSince1970 * 1000).rounded(.up))
+        saturatingMillis((date.timeIntervalSince1970 * 1000).rounded(.up))
     }
 
     private static func floorMillis(_ date: Date) -> Int64 {
-        Int64((date.timeIntervalSince1970 * 1000).rounded(.down))
+        saturatingMillis((date.timeIntervalSince1970 * 1000).rounded(.down))
+    }
+
+    /// `Int64(_:)` traps on NaN, infinity and out-of-range values. NaN and
+    /// the far future map to `.max` (the "nothing due" sentinel); the far
+    /// past maps to `.min`.
+    private static func saturatingMillis(_ value: Double) -> Int64 {
+        if value.isNaN || value >= Double(Int64.max) { return .max }
+        if value <= Double(Int64.min) { return .min }
+        return Int64(value)
     }
 }
 
