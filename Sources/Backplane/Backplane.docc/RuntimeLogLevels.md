@@ -16,7 +16,7 @@ The table holds a base level (the bootstrap's resolved level) plus
 | `labelPrefix` | Matched against the logger label with `hasPrefix`. |
 | `subsystem` | `nil` or `"*"` (`*` decodes to `nil`): any message from the label. Otherwise only messages whose subsystem metadata equals it. |
 | `level` | The minimum level emitted. |
-| `expiresAt` | Optional. After it, the rule is ignored and pruned. A far-future date is safe: the expiry is converted to milliseconds with saturation. A NaN date counts as already expired (stored as `Date.distantPast`, so `set` drops it); `+infinity` never expires. |
+| `expiresAt` | Optional. After it, the rule is ignored and pruned. A far-future date is safe: the expiry is converted to milliseconds with saturation. A NaN date counts as already expired (stored as `Date.distantPast`, so `set` drops it); `+infinity` never expires, but an infinite date does not encode with a default `JSONEncoder` (use a non-conforming-float strategy, or `Date.distantFuture`). |
 
 ### Resolution
 

@@ -95,7 +95,7 @@ struct LogLevelRuleTests {
         #expect(LogLevelRule(labelPrefix: "a", level: .debug).isExpired(at: .distantFuture) == false)
     }
 
-    @Test("expiry at exactly now counts as expired; a hair before does not")
+    @Test("expiry at exactly now counts as expired; a hair after does not")
     func expiryBoundary() {
         let now = Date(timeIntervalSinceReferenceDate: 800_000_000.123456)
         #expect(LogLevelRule(labelPrefix: "a", level: .debug, expiresAt: now).isExpired(at: now))
