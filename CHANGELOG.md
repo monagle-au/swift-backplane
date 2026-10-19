@@ -8,6 +8,8 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-10-19
+
 ### Added
 
 - **Runtime log levels.** `LogLevelTable` holds a base level plus
@@ -642,7 +644,8 @@ follow strict SemVer.
 - Swift 6.2+
 - macOS 15+
 
-[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v2.2.1...HEAD
+[Unreleased]: https://github.com/monagle-au/swift-backplane/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/monagle-au/swift-backplane/compare/v2.2.1...v2.3.0
 [2.2.1]: https://github.com/monagle-au/swift-backplane/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/monagle-au/swift-backplane/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/monagle-au/swift-backplane/compare/v2.0.1...v2.1.0
