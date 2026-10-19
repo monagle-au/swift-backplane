@@ -94,4 +94,40 @@ struct LogLevelRuleTests {
         #expect(rule.isExpired(at: at) == true)
         #expect(LogLevelRule(labelPrefix: "a", level: .debug).isExpired(at: .distantFuture) == false)
     }
+
+    @Test("expiry at exactly now counts as expired; a hair before does not")
+    func expiryBoundary() {
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000.123456)
+        #expect(LogLevelRule(labelPrefix: "a", level: .debug, expiresAt: now).isExpired(at: now))
+        let later = Date(timeIntervalSinceReferenceDate: now.timeIntervalSinceReferenceDate.nextUp)
+        #expect(LogLevelRule(labelPrefix: "a", level: .debug, expiresAt: later).isExpired(at: now) == false)
+    }
+
+    @Test("infinite expiry: +infinity never expires, -infinity is expired")
+    func infiniteExpiryPredicate() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(LogLevelRule(labelPrefix: "a", level: .debug, expiresAt: Date(timeIntervalSinceReferenceDate: .infinity)).isExpired(at: now) == false)
+        #expect(LogLevelRule(labelPrefix: "a", level: .debug, expiresAt: Date(timeIntervalSinceReferenceDate: -.infinity)).isExpired(at: now))
+    }
+
+    @Test("a NaN expiresAt is normalised to distantPast: expired, equal to itself, round-trips as JSON")
+    func nanExpiryNormalised() throws {
+        let rule = LogLevelRule(labelPrefix: "a", level: .debug, expiresAt: Date(timeIntervalSince1970: .nan))
+        #expect(rule.expiresAt == .distantPast)
+        #expect(rule.isExpired(at: Date(timeIntervalSince1970: 0)))
+        #expect(rule == rule)
+        let data = try JSONEncoder().encode(rule)
+        let decoded = try JSONDecoder().decode(LogLevelRule.self, from: data)
+        #expect(decoded == rule)
+        #expect(decoded.expiresAt == .distantPast)
+    }
+
+    @Test("decoding a NaN expiresAt normalises it too")
+    func decodeNaNExpiry() throws {
+        let json = #"{"labelPrefix":"a","level":"debug","expiresAt":"nan"}"#
+        let decoder = JSONDecoder()
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
+        let rule = try decoder.decode(LogLevelRule.self, from: Data(json.utf8))
+        #expect(rule.expiresAt == .distantPast)
+    }
 }

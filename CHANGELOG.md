@@ -16,7 +16,11 @@ from `1.0.0` onwards.
   the message's subsystem beats an any-subsystem rule (`nil` or `"*"`;
   `LogLevelRule` decodes `*` to `nil`). Expired rules are ignored and
   pruned. Expiry is converted to milliseconds with saturation, so a
-  far-future `expiresAt` cannot trap. `BackplaneLogging.levelTable` is
+  far-future `expiresAt` cannot trap. A NaN `expiresAt` is treated as
+  already expired (normalised to `Date.distantPast`, also when decoded),
+  so `set(_:)` drops it instead of keeping a permanent rule; `+infinity`
+  never expires. The expiry check compares `timeIntervalSinceReferenceDate`,
+  which agrees exactly with `Date` ordering. `BackplaneLogging.levelTable` is
   the process's table. `set(_:)`, `remove(labelPrefix:subsystem:)`,
   `reset()` (back to the configured rules), `rules()` and `snapshot()` let
   an admin flow change verbosity without a restart. `isConsulted` is

@@ -37,14 +37,19 @@ public struct LogLevelRule: Sendable, Hashable, Codable, CustomStringConvertible
     /// The minimum level messages matching this rule are emitted at.
     public let level: Logger.Level
 
-    /// When set, the rule stops applying at this instant.
+    /// When set, the rule stops applying at this instant. Never NaN: see
+    /// ``init(labelPrefix:subsystem:level:expiresAt:)``.
     public let expiresAt: Date?
 
+    /// A NaN `expiresAt` is treated as already expired and stored as
+    /// `Date.distantPast`, so ``LogLevelTable/set(_:)`` drops it rather than
+    /// letting it become a permanent rule. `+infinity` never expires and
+    /// `-infinity` is expired.
     public init(labelPrefix: String, subsystem: String? = nil, level: Logger.Level, expiresAt: Date? = nil) {
         self.labelPrefix = labelPrefix
         self.subsystem = subsystem == Self.anySubsystem ? nil : subsystem
         self.level = level
-        self.expiresAt = expiresAt
+        self.expiresAt = expiresAt.map { $0.timeIntervalSinceReferenceDate.isNaN ? .distantPast : $0 }
     }
 
     /// Decodes through the designated `init`, so `"subsystem": "*"` is
@@ -87,13 +92,14 @@ public struct LogLevelRule: Sendable, Hashable, Codable, CustomStringConvertible
         self.init(labelPrefix: label, subsystem: subsystem, level: level)
     }
 
-    /// `true` once `date` has reached ``expiresAt``. A NaN ``expiresAt``
-    /// never expires.
+    /// `true` once `date` has reached ``expiresAt``. A `+infinity`
+    /// ``expiresAt`` never expires; `-infinity` is always expired.
     public func isExpired(at date: Date) -> Bool {
         guard let expiresAt else { return false }
-        // Compare the doubles: `Date`'s derived `<=` is `!(date < expiresAt)`,
-        // which is true for NaN and would expire the rule on arrival.
-        return expiresAt.timeIntervalSince1970 <= date.timeIntervalSince1970
+        // Reference-date seconds are `Date`'s own storage, so this agrees
+        // exactly with `Date` ordering; `timeIntervalSince1970` adds an offset
+        // that rounds and can report expiry a fraction of a microsecond early.
+        return expiresAt.timeIntervalSinceReferenceDate <= date.timeIntervalSinceReferenceDate
     }
 
     /// The rule in `label[:subsystem]=level` form. ``expiresAt`` is not part

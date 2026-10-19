@@ -246,21 +246,31 @@ struct LogLevelTableTests {
         #expect(table.generation == g)
     }
 
-    @Test("a NaN expiresAt never expires and does not stop other rules being pruned")
-    func nanExpiryDoesNotBlockPruning() {
+    @Test("a NaN expiresAt is already expired: set drops it and other rules still prune")
+    func nanExpiryIsDropped() {
         let clock = TestClock()
         let table = LogLevelTable(baseLevel: .info, now: { clock.now })
-        // The longer prefix sorts the NaN rule first, where an unfiltered
-        // `min()` would keep it and report nothing due.
-        table.set(LogLevelRule(labelPrefix: "never-expiring", level: .trace, expiresAt: Date(timeIntervalSince1970: .nan)))
+        table.set(LogLevelRule(labelPrefix: "nan-rule", level: .trace, expiresAt: Date(timeIntervalSince1970: .nan)))
+        #expect(table.rules().isEmpty)
+        #expect(table.level(for: "nan-rule.x", subsystem: nil) == .info)
         table.set(LogLevelRule(labelPrefix: "short", level: .debug, expiresAt: clock.now.addingTimeInterval(5)))
         clock.advance(6)
         let g = table.generation
         table.pruneIfDue()
         #expect(table.generation > g)
-        #expect(table.labelEntry(for: "short").entry.level == .info)
-        #expect(table.rules().map(\.labelPrefix) == ["never-expiring"])
-        #expect(table.level(for: "never-expiring.x", subsystem: nil) == .trace)
+        #expect(table.rules().isEmpty)
+    }
+
+    @Test("a +infinity expiresAt is kept and never expires; -infinity is dropped")
+    func infiniteExpiry() {
+        let clock = TestClock()
+        let table = LogLevelTable(baseLevel: .info, now: { clock.now })
+        table.set(LogLevelRule(labelPrefix: "forever", level: .trace, expiresAt: Date(timeIntervalSinceReferenceDate: .infinity)))
+        table.set(LogLevelRule(labelPrefix: "gone", level: .trace, expiresAt: Date(timeIntervalSinceReferenceDate: -.infinity)))
+        #expect(table.rules().map(\.labelPrefix) == ["forever"])
+        clock.advance(1_000_000)
+        table.pruneIfDue()
+        #expect(table.level(for: "forever.x", subsystem: nil) == .trace)
     }
 
     // MARK: - Subsystem keys
