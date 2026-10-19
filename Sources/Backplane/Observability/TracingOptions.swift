@@ -18,7 +18,7 @@ import Configuration
 /// struct Serve: PersistentCommand {
 ///     typealias App = MyApp
 ///     @OptionGroup var tracing: TracingOptions
-///     var requiredServices: [any ServiceKey.Type] { [] }
+///     var requiredServices: ServiceList { [] }
 ///
 ///     func bootstrap(config: ConfigReader, environment: Environment) -> BootstrapPlan {
 ///         var plan = BootstrapPlan()

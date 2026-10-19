@@ -52,19 +52,37 @@ public struct LifecycleService: Sendable {
 /// Logging comes last so that any `Logger.MetadataProvider` you supply can
 /// reference task-local context that the tracer set on its first span.
 public struct BootstrapPlan: Sendable {
-    /// Factory used to build per-label `LogHandler`s. When `nil`, logging is
-    /// not bootstrapped by this plan and swift-log's default handler stays
-    /// in place.
+    /// Factory used to build per-label `LogHandler`s. When `nil` and
+    /// logging is otherwise configured, ``BackplaneLogging/cloudRunOrStream``
+    /// is used. Whatever factory results is wrapped in a
+    /// ``LevelTableLogHandler`` over ``levelTable``.
     public var logHandlerFactory: LogHandlerFactory?
 
-    /// Default level to apply to every handler built by ``logHandlerFactory``.
-    /// When `nil`, ``BackplaneLogging/resolveLogLevel(envVar:)`` reads the
-    /// `LOG_LEVEL` env var; if that is also unset, `.info` is used.
+    /// Base level installed into the level table. When `nil`,
+    /// ``BackplaneLogging/resolveLogLevel(envVar:)`` reads the `LOG_LEVEL`
+    /// env var; if that is also unset, `.info` is used.
     public var logLevel: Logger.Level?
+
+    /// Per-label (and optionally per-subsystem) level rules installed as
+    /// the table's configured rules. ``LogLevelTable/reset()`` returns to
+    /// these. See ``LoggingOptions/resolvedLogRules``.
+    public var logRules: [LogLevelRule]
+
+    /// Malformed rule texts that were dropped while resolving
+    /// ``logRules`` (see ``LoggingOptions/rejectedLogRules``). The
+    /// coordinator logs one warning per entry once logging is installed.
+    /// Informational only: it does not affect ``isEmpty`` or
+    /// ``hasLoggingConfiguration``, so it never causes an install on its own.
+    public var rejectedLogRules: [String] = []
 
     /// Optional cross-cutting metadata provider, attached to every logger
     /// constructed after bootstrap.
     public var loggerMetadataProvider: Logger.MetadataProvider?
+
+    /// The table to install into and consult. `nil` means the process
+    /// table, ``BackplaneLogging/levelTable``. Setting only this field
+    /// does not configure logging.
+    public var levelTable: LogLevelTable?
 
     /// Tracer (or any `Instrument`) to install as the process-wide
     /// instrumentation system. When `nil`, swift-distributed-tracing's
@@ -84,23 +102,29 @@ public struct BootstrapPlan: Sendable {
     public init(
         logHandlerFactory: LogHandlerFactory? = nil,
         logLevel: Logger.Level? = nil,
+        logRules: [LogLevelRule] = [],
         loggerMetadataProvider: Logger.MetadataProvider? = nil,
+        levelTable: LogLevelTable? = nil,
         instrument: (any Instrument)? = nil,
         metricsFactory: (any MetricsFactory)? = nil,
         lifecycleServices: [LifecycleService] = []
     ) {
         self.logHandlerFactory = logHandlerFactory
         self.logLevel = logLevel
+        self.logRules = logRules
         self.loggerMetadataProvider = loggerMetadataProvider
+        self.levelTable = levelTable
         self.instrument = instrument
         self.metricsFactory = metricsFactory
         self.lifecycleServices = lifecycleServices
     }
 
-    /// `true` when no field is set — applying it is a no-op.
+    /// `true` when no field that causes an install is set — applying it
+    /// is a no-op. ``levelTable`` alone does not count.
     public var isEmpty: Bool {
         logHandlerFactory == nil
             && logLevel == nil
+            && logRules.isEmpty
             && loggerMetadataProvider == nil
             && instrument == nil
             && metricsFactory == nil
@@ -110,6 +134,6 @@ public struct BootstrapPlan: Sendable {
     /// `true` when at least one logging-related field is set, so the
     /// coordinator should bootstrap `LoggingSystem`.
     public var hasLoggingConfiguration: Bool {
-        logHandlerFactory != nil || logLevel != nil || loggerMetadataProvider != nil
+        logHandlerFactory != nil || logLevel != nil || !logRules.isEmpty || loggerMetadataProvider != nil
     }
 }

@@ -39,7 +39,10 @@ import Synchronization
 ///
 /// 1. `InstrumentationSystem.bootstrap(plan.instrument)`
 /// 2. `MetricsSystem.bootstrap(plan.metricsFactory)`
-/// 3. `LoggingSystem.bootstrap(plan.logHandlerFactory, metadataProvider:)`
+/// 3. `LoggingSystem.bootstrap(plan.logHandlerFactory, metadataProvider:)`,
+///    with the factory wrapped in ``LevelTableLogHandler`` after the
+///    resolved level and ``BootstrapPlan/logRules`` are installed into
+///    ``BootstrapPlan/levelTable`` (default ``BackplaneLogging/levelTable``).
 ///
 /// ## Interaction with the static escape-hatch methods
 ///
@@ -66,10 +69,13 @@ public final class BootstrapCoordinator: Sendable {
     private let installMetrics: @Sendable (any MetricsFactory) -> Void
 
     /// Hook called when a logging factory should be installed. The factory
-    /// is passed pre-leveled — ``apply(_:)`` resolves the level (explicit
-    /// > env > `.info`) and wraps the caller-supplied factory before
-    /// invoking the hook. Default routes to `LoggingSystem.bootstrap` (with
-    /// or without a metadata provider depending on whether one is supplied).
+    /// is passed already wrapped in ``LevelTableLogHandler``: ``apply(_:)``
+    /// resolves the level (explicit > env > `.info`), installs it and the
+    /// plan's rules into the level table, and wraps the caller-supplied
+    /// factory before invoking the hook. The level argument is the resolved
+    /// base level, for information; handlers already report it. Default
+    /// routes to `LoggingSystem.bootstrap` (with or without a metadata
+    /// provider depending on whether one is supplied).
     private let installLogging: @Sendable (@escaping LogHandlerFactory, Logger.Level, Logger.MetadataProvider?) -> Void
 
     private let state: Mutex<State>
@@ -87,23 +93,17 @@ public final class BootstrapCoordinator: Sendable {
         installMetrics: @escaping @Sendable (any MetricsFactory) -> Void = { factory in
             MetricsSystem.bootstrap(factory)
         },
-        installLogging: @escaping @Sendable (@escaping LogHandlerFactory, Logger.Level, Logger.MetadataProvider?) -> Void = { factory, level, provider in
-            // Wrap the caller-supplied factory so every handler gets the
-            // resolved level applied at construction. `LogHandler.logLevel`
-            // is `var` on the protocol — assignment after init is the
-            // documented swift-log path for level overrides.
-            let leveledFactory: LogHandlerFactory = { label in
-                var handler = factory(label)
-                handler.logLevel = level
-                return handler
-            }
+        installLogging: @escaping @Sendable (@escaping LogHandlerFactory, Logger.Level, Logger.MetadataProvider?) -> Void = { factory, _, provider in
+            // The factory is already table-wrapped; its handlers take their
+            // level from the table. Assigning `handler.logLevel` here would
+            // set a per-instance floor and stop rules lowering the level.
             if let provider {
                 LoggingSystem.bootstrap(
-                    { label, _ in leveledFactory(label) },
+                    { label, provider in BootstrapCoordinator.handler(from: factory, label: label, metadataProvider: provider) },
                     metadataProvider: provider
                 )
             } else {
-                LoggingSystem.bootstrap(leveledFactory)
+                LoggingSystem.bootstrap(factory)
             }
         }
     ) {
@@ -111,6 +111,19 @@ public final class BootstrapCoordinator: Sendable {
         self.installMetrics = installMetrics
         self.installLogging = installLogging
         self.state = Mutex(.init())
+    }
+
+    /// The handler the default `installLogging` hook builds for `label`:
+    /// `factory`'s handler, given `metadataProvider` when there is one.
+    @usableFromInline
+    static func handler(
+        from factory: LogHandlerFactory,
+        label: String,
+        metadataProvider: Logger.MetadataProvider?
+    ) -> any LogHandler {
+        var handler = factory(label)
+        if let metadataProvider { handler.metadataProvider = metadataProvider }
+        return handler
     }
 
     // MARK: - apply
@@ -152,7 +165,22 @@ public final class BootstrapCoordinator: Sendable {
                 ?? .info
             let factory = plan.logHandlerFactory
                 ?? BackplaneLogging.cloudRunOrStream.asFactory
-            self.installLogging(factory, resolvedLevel, plan.loggerMetadataProvider)
+            let table = plan.levelTable ?? BackplaneLogging.levelTable
+            table.install(baseLevel: resolvedLevel, configuredRules: plan.logRules)
+            let installed = LevelTableLogHandler.factory(wrapping: factory, table: table)
+            self.installLogging(
+                installed,
+                resolvedLevel,
+                plan.loggerMetadataProvider
+            )
+            // Built from the installed factory (not the global system) so
+            // the warning goes through exactly the handler just installed.
+            if !plan.rejectedLogRules.isEmpty {
+                let logger = Logger(label: "backplane.logging", factory: installed)
+                for text in plan.rejectedLogRules {
+                    logger.warning("Ignoring malformed logging rule '\(text)'")
+                }
+            }
         }
     }
 

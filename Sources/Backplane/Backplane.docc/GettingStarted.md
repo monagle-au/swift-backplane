@@ -227,9 +227,12 @@ struct Serve: PersistentCommand {
     var requiredServices: ServiceList { [\.clock] }
 
     func bootstrap(config: ConfigReader, environment: Environment) async throws -> BootstrapPlan {
+        let merged = logging.merging(from: config.scoped(to: "logging"))
         var plan = BootstrapPlan()
-        plan.logLevel = logging.resolvedLogLevel
-        plan.logHandlerFactory = logging.format.factory(
+        plan.logLevel = merged.resolvedLogLevel
+        plan.logRules = merged.resolvedLogRules
+        plan.rejectedLogRules = merged.rejectedLogRules
+        plan.logHandlerFactory = merged.format.factory(
             default: BackplaneLogging.cloudRunOrStream.asFactory
         )
         return plan

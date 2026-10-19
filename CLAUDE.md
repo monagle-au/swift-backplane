@@ -204,6 +204,32 @@ EntryDescriptor(Services().auditStore,
 - Overriding a conforming type's defaults:
   `EntryDescriptor(\.postgres, subgroup: .integrations, replacement: .coldRestart)`.
 
+### Logging levels
+
+`BootstrapCoordinator.apply` installs the resolved level and
+`BootstrapPlan.logRules` into `plan.levelTable ?? BackplaneLogging.levelTable`
+and wraps the plan's handler factory in `LevelTableLogHandler`. Rules are
+`LogLevelRule(labelPrefix:subsystem:level:expiresAt:)` (text form
+`label[:subsystem]=level`, `*` = any subsystem → `nil`). The handler's
+`logLevel` getter is a cached per-label minimum (`LevelCache`, an
+`Atomic<UInt64>` packing generation and level): a few atomic loads and no
+lock in the steady state, plus a clock read while any rule has an expiry
+and the lock once per expiry (it prunes expired rules). `log(event:)`
+applies the exact subsystem rule. Instance `logLevel` is a floor (only quieter). `LevelTableLogHandler` must be outermost, never
+inside a `MultiplexLogHandler` (the multiplex records its level once).
+`BootstrapPlan.rejectedLogRules` makes `apply` warn once per entry under label
+`backplane.logging`, so the table's level for that label applies (normally
+the base level). After merging `LoggingOptions`, set both
+`plan.logRules = merged.resolvedLogRules` and
+`plan.rejectedLogRules = merged.rejectedLogRules`.
+Tests build their own `LogLevelTable` and loggers via
+`Logger(label:factory:)` and inject `plan.levelTable` or their own table;
+never `LoggingSystem.bootstrap`. Don't use the shared table in tests; the one
+deliberate exception is `defaultsToProcessTable`, the only test that writes
+to `BackplaneLogging.levelTable` (`sharedTable` only reads it).
+A custom `installLogging` hook must not set `handler.logLevel = level` (a
+per-instance floor stops rules lowering the level).
+
 ### Writing a command
 
 Single-command app (no `services()` needed when the required types

@@ -21,7 +21,7 @@
 /// let db = try await context.requireService(\.database)
 ///
 /// // Dependency list — keypaths erase to PartialKeyPath<Services>:
-/// var requiredServices: [PartialKeyPath<Services>] {
+/// var requiredServices: ServiceList {
 ///     [\.database]
 /// }
 /// ```

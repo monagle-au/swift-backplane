@@ -73,7 +73,9 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.6.1"),
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.8.0"),
         .package(url: "https://github.com/apple/swift-service-context.git", from: "1.2.1"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.6.4"),
+        // 1.11.0 introduced `LogEvent` / `LogHandler.log(event:)`, which
+        // `LevelTableLogHandler` implements and forwards to its inner handler.
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.11.0"),
         .package(url: "https://github.com/apple/swift-metrics.git", from: "2.7.0"),
         .package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.2.1"),
 

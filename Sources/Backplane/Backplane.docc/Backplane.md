@@ -93,12 +93,16 @@ integrations they don't use.
 
 ### Observability
 
+- <doc:RuntimeLogLevels>
 - ``LoggingOptions``
 - ``TracingOptions``
 - ``MetricsOptions``
 - ``StructuredLogHandler``
 - ``StructuredLogProfile``
 - ``BackplaneLogging``
+- ``LogLevelTable``
+- ``LogLevelRule``
+- ``LevelTableLogHandler``
 - ``LoggingTraceContext``
 - ``LoggingTraceContextKey``
 - ``LogHandlerFactory``

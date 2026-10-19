@@ -67,7 +67,10 @@ struct Serve: PersistentCommand {
     func bootstrap(config: ConfigReader, environment: Environment) async throws -> BootstrapPlan {
         var plan = BootstrapPlan()
         plan.logHandlerFactory = BackplaneGCP.cloudRunOrStream.asFactory
-        plan.logLevel = logging.resolvedLogLevel
+        let merged = logging.merging(from: config.scoped(to: "logging"))
+        plan.logLevel = merged.resolvedLogLevel
+        plan.logRules = merged.resolvedLogRules
+        plan.rejectedLogRules = merged.rejectedLogRules
         return plan
     }
 }
