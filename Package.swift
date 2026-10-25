@@ -77,7 +77,7 @@ let package = Package(
         // `LevelTableLogHandler` implements and forwards to its inner handler.
         .package(url: "https://github.com/apple/swift-log.git", from: "1.11.0"),
         .package(url: "https://github.com/apple/swift-metrics.git", from: "2.7.0"),
-        .package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.2.1"),
+        .package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.7.2"),
 
         // Postgres — used only by the BackplanePostgres target. Resolved
         // unconditionally (SwiftPM resolves the full dependency graph), but the
@@ -89,7 +89,7 @@ let package = Package(
         // OTel — used only by the BackplaneOTel target. Same pattern as
         // postgres-nio: resolved at the package level, conditionally linked
         // by trait.
-        .package(url: "https://github.com/swift-otel/swift-otel.git", from: "1.0.0"),
+        .package(url: "https://github.com/swift-otel/swift-otel.git", from: "1.6.0"),
 
         // swift-crypto — used only by the BackplaneVault target's
         // `LocalKeyfileEncryption` reference implementation. Resolved
