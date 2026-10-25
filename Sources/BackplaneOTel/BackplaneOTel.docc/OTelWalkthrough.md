@@ -1,6 +1,6 @@
 # OpenTelemetry Walkthrough
 
-Wire OpenTelemetry tracing and metrics into a Backplane
+Wire OpenTelemetry tracing, metrics and logs into a Backplane
 application using `swift-otel`.
 
 ## Overview
@@ -64,7 +64,8 @@ on, `logHandlerFactory`), and `BackplaneCommand.run()` hands the plan to
 `BootstrapCoordinator`, which installs each subsystem exactly once. An
 app that does not use `BackplaneCommand` applies the plan itself with
 `BootstrapCoordinator.shared.apply(plan)` and runs
-`plan.lifecycleServices` in its own `ServiceGroup`.
+each entry of `plan.lifecycleServices` (its `service`) in its own
+`ServiceGroup`.
 
 The returned plan carries a single `LifecycleService`, labelled `otel`,
 whose `ServiceGroup` runs the export loops of every enabled backend
@@ -76,8 +77,8 @@ metrics factory, so nothing is recorded.
 
 ```bash
 swift run my-app serve \
-    --trace --otel-endpoint=otel-collector:4317 \
-    --metrics --otel-metrics-endpoint=otel-collector:4317
+    --trace --otel-endpoint=http://otel-collector:4318/v1/traces \
+    --metrics --otel-metrics-endpoint=http://otel-collector:4318/v1/metrics
 ```
 
 (The service name isn't a flag on these option groups — it's
@@ -88,7 +89,7 @@ defaults. Useful for production:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com:4317
-OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc  # gRPC, so port 4317
 OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production
 ```
 
@@ -122,10 +123,10 @@ Operators can now drive the same fields via env vars:
 
 ```bash
 TRACING_ENABLED=true
-TRACING_ENDPOINT=otel-collector:4317
+TRACING_ENDPOINT=http://otel-collector:4318/v1/traces
 TRACING_SAMPLE_RATE=0.1
 METRICS_ENABLED=true
-METRICS_ENDPOINT=otel-collector:4318
+METRICS_ENDPOINT=http://otel-collector:4318/v1/metrics
 ```
 
 …or via a `.env` file, secret-manager-backed provider, or
@@ -213,8 +214,8 @@ A minimal `otel-collector.yaml`:
 receivers:
   otlp:
     protocols:
-      grpc:
-        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
 
 exporters:
   debug:
@@ -231,7 +232,7 @@ service:
 ```
 
 Start the collector, then `swift run my-app serve --trace
---otel-endpoint=localhost:4317`. Spans appear in the collector's
+--otel-endpoint=http://localhost:4318/v1/traces`. Spans appear in the collector's
 stdout, easy to inspect.
 
 ## Sampling
