@@ -56,6 +56,11 @@ from `1.0.0` onwards.
 - swift-otel's `logs.level` / `OTEL_SWIFT_LOG_LEVEL` no longer filter OTLP
   records; the level table does, so `--log-rule` and `logging.rules` now
   apply to OTel logs.
+- The outer `otel` `ServiceGroup` is now logged by Backplane's stderr
+  export logger, not swift-otel's diagnostic logger, so a
+  `config.diagnosticLogger = .custom(...)` no longer sees that group's
+  lifecycle lines. (The plan's service order is unchanged: traces,
+  metrics, logs; swift-otel's own order is logs, metrics, traces.)
 - `OTEL_SDK_DISABLED=true` returns an empty plan (no installs, no
   services).
 

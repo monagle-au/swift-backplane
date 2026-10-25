@@ -34,6 +34,18 @@ struct OTelRecordLogHandlerTests {
         #expect(sink.logs.first?.metadata["logger"] == "other")
     }
 
+    @Test("A handler-level logger key is kept on the OTLP leg")
+    func handlerLevelKeyWins() {
+        let sink = LogSink()
+        var inner = RecordingHandler(sink)
+        inner[metadataKey: "logger"] = "pinned"
+        let logger = Logger(label: "acumen.engine") { label in
+            OTelRecordLogHandler(label: label, wrapping: inner)
+        }
+        logger.info("x")
+        #expect(sink.logs.first?.metadata["logger"] == "pinned")
+    }
+
     @Test("A metadata provider is not handed to the OTLP handler")
     func ignoresMetadataProvider() {
         let sink = LogSink()

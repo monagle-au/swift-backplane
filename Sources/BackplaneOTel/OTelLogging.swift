@@ -14,8 +14,8 @@ extension BackplaneOTel {
     ///
     /// swift-otel's logging backend serves every label with one handler and
     /// keeps no label on the record, so without this a log store cannot tell
-    /// `acumen.engine` from `acumen.agent.matter-agent`. A message's own
-    /// `logger` metadata wins.
+    /// `acumen.engine` from `acumen.agent.matter-agent`. A message's or the
+    /// logger's own `logger` key wins.
     public static let loggerLabelKey = "logger"
 
     /// The logging factory ``makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:localLogs:)``
@@ -41,7 +41,7 @@ extension BackplaneOTel {
 /// Wraps swift-otel's log handler for one label.
 ///
 /// - Stamps ``BackplaneOTel/loggerLabelKey`` with the label, unless the
-///   message already has that key.
+///   message or the wrapped handler already has that key.
 /// - Accepts and drops a metadata provider. The OTLP record takes its trace
 ///   and span ids from `InstrumentationContext.current` itself, and swift-otel's
 ///   handler has no provider support (assigning one would log swift-log's
@@ -79,7 +79,8 @@ struct OTelRecordLogHandler: LogHandler {
     func log(event: LogEvent) {
         var event = event
         var metadata = event.metadata ?? [:]
-        if metadata[BackplaneOTel.loggerLabelKey] == nil {
+        if metadata[BackplaneOTel.loggerLabelKey] == nil,
+           wrapped[metadataKey: BackplaneOTel.loggerLabelKey] == nil {
             metadata[BackplaneOTel.loggerLabelKey] = .string(label)
         }
         event.metadata = metadata
