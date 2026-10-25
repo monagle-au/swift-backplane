@@ -8,47 +8,62 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
-### Changed
+### Fixed
 
-- **`BackplaneOTel.makeBootstrap` installs nothing until the plan is
-  applied. This is a behaviour change for direct callers.** It used to call
-  `OTel.bootstrap`, which installed `InstrumentationSystem`, `MetricsSystem`
-  and `LoggingSystem` as a side effect. It now builds the backends with
-  `OTel.makeTracingBackend`, `makeMetricsBackend` and `makeLoggingBackend`
-  and returns them in the plan (`instrument`, `metricsFactory`,
-  `logHandlerFactory`), with the export loops in one `otel`
-  `LifecycleService`. Apply the plan through `BackplaneCommand.run()` or
-  `BootstrapCoordinator.shared.apply(_:)`. A caller that copies only
-  `lifecycleServices` into another plan loses tracing and metrics: copy the
-  whole plan, or its `instrument`, `metricsFactory` and `logHandlerFactory`
-  too. A plan applied after logging was already bootstrapped installs
-  tracing and metrics and skips logging.
-- **OTel logs now go through the level table.** The OTLP handler is installed
-  like any other `logHandlerFactory`, so the coordinator wraps it in
-  `LevelTableLogHandler`: `--log-rule`, `logging.rules` and runtime
-  `LogLevelTable.set(_:)` apply to OTLP records, and
-  `LogLevelTable.isConsulted` is `true` once a logger is built. swift-otel's
-  own `logs.level` / `OTEL_SWIFT_LOG_LEVEL` no longer filter; the table
-  decides.
-- `makeBootstrap` gains a final `localLogs:` parameter (after `configure:`,
-  so a trailing closure still binds to `configure`). Its handlers receive every
-  message the OTLP handler receives, multiplexed behind the one level table.
-  The signature is now
-  `makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:localLogs:)`.
+- **OTel logs go through the level table** (#14). With
+  `BackplaneOTel.makeBootstrap(logsEnabled: true)`, swift-otel's log
+  handler is the plan's `logHandlerFactory`, so `BootstrapCoordinator`
+  wraps it in `LevelTableLogHandler`: `--log-rule`, `logging.rules` and
+  runtime `LogLevelTable.set(_:)` apply to OTLP records, and
+  `isConsulted` is `true`.
+- **Logging cannot be bootstrapped twice through BackplaneOTel** (#14).
+  `makeBootstrap` no longer calls `OTel.bootstrap` and touches no global.
+  It builds the backends (`OTel.makeTracingBackend`, `makeMetricsBackend`,
+  `makeLoggingBackend`) and returns them as `plan.instrument`,
+  `plan.metricsFactory` and `plan.logHandlerFactory`, with their export
+  loops in one `LifecycleService` labelled `otel`. The coordinator installs
+  each at most once, so `bootstrapLogging` followed by an OTel-logs plan
+  installs tracing and metrics and skips logging instead of crashing.
 
 ### Added
 
-- `BackplaneOTel.loggerLabelKey` (`"logger"`): each OTLP log record carries its
-  swift-log label under this attribute, unless the message sets its own.
-- With logs and traces both on, the plan's `loggerMetadataProvider` is
-  `OTel.makeLoggingMetadataProvider()`. It reaches the `localLogs` handlers;
-  the OTLP handler ignores it and takes ids from the span context.
+- `makeBootstrap(…, configure:, localLogs:)`: a factory multiplexed beside the OTLP
+  handler, behind the same level table, for example console output.
+- OTLP log records carry their swift-log label as the attribute `logger`
+  (`BackplaneOTel.loggerLabelKey`); a message's own `logger` key wins.
+- With logs and traces on, the plan's `loggerMetadataProvider` is
+  `OTel.makeLoggingMetadataProvider()`. It reaches the local handlers;
+  the OTLP handler ignores providers and takes its ids from the span
+  context.
 
-### Fixed
+### Changed
 
-- `LogLevelTable.isConsulted` documentation: it is `false` after a direct
-  `LoggingSystem.bootstrap`, and after a coordinator bootstrap until the first
-  logger is built; it is no longer `false` for OTel logs.
+- **Behaviour change for direct callers: `makeBootstrap` installs
+  nothing until the plan is applied.** In 2.3.0 it bootstrapped the
+  enabled globals itself, before returning. Now nothing is installed
+  until the plan goes through `BackplaneCommand.run()` or
+  `BootstrapCoordinator.shared.apply(_:)`, and nothing exports until
+  its `lifecycleServices` run. A caller that used the returned plan only
+  for its services must now apply it. A caller that copies only
+  `lifecycleServices` into another plan loses tracing and metrics: copy
+  the whole plan. `makeBootstrap` no longer calls
+  `markTracingBootstrapped()` / `markMetricsBootstrapped()` /
+  `markLoggingBootstrapped()`; those stay public.
+- `localLogs:` is the last parameter, after `configure:`, so an existing
+  trailing closure still binds to `configure`.
+- swift-otel `from: "1.6.0"` and swift-distributed-tracing
+  `from: "1.7.2"`.
+- swift-otel's `logs.level` / `OTEL_SWIFT_LOG_LEVEL` no longer filter OTLP
+  records; the level table does, so `--log-rule` and `logging.rules` now
+  apply to OTel logs.
+- `OTEL_SDK_DISABLED=true` returns an empty plan (no installs, no
+  services).
+
+### Docs
+
+- `isConsulted` is `false` until the first logger is built; a plan's
+  metadata provider reaches every multiplexed child that supports one
+  (from #16).
 
 ## [2.3.0] — 2026-10-19
 

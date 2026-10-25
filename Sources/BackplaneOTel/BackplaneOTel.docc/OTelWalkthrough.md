@@ -132,71 +132,45 @@ METRICS_ENDPOINT=otel-collector:4318
 anything else `ConfigReader` supports. CLI flags still win when
 explicitly passed.
 
-## Combine with a different log handler
+## Logs over OTLP, with console output and runtime levels
 
-With `logsEnabled: false` (the default), `makeBootstrap` leaves the
-logging subsystem alone, so you can combine OTel tracing and metrics
-with `StructuredLogHandler` (vendor-neutral JSON), `GCPLogHandler`
-(`BackplaneGCP`), or `StreamLogHandler` (text).
-
-To get trace IDs into log lines without exporting logs over OTLP, set
-the plan's metadata provider from `OTel.makeLoggingMetadataProvider()`:
+With `logsEnabled: true`, OTLP log records go through the level table
+like any other handler. Pass `localLogs` to keep console output too.
+Both legs sit behind one `LevelTableLogHandler`, so `--log-rule`,
+`logging.rules` and runtime `set` change what reaches both:
 
 ```swift
-import OTel
-
 func bootstrap(config: ConfigReader, environment: Environment) throws -> BootstrapPlan {
     var plan = try BackplaneOTel.makeBootstrap(
         serviceName: App.identifier,
         tracing: tracing,
         metrics: metrics,
-        logsEnabled: false
+        logsEnabled: true,
+        localLogs: BackplaneLogging.stream   // after `configure:` when both are given
     )
-
-    plan.logHandlerFactory = BackplaneLogging.cloudRunOrStream.asFactory
     let merged = logging.merging(from: config.scoped(to: "logging"))
     plan.logLevel = merged.resolvedLogLevel
     plan.logRules = merged.resolvedLogRules
     plan.rejectedLogRules = merged.rejectedLogRules
-    plan.loggerMetadataProvider = OTel.makeLoggingMetadataProvider()
-
     return plan
 }
 ```
 
-The metadata provider attaches `trace_id` / `span_id` /
-`trace_flags` keys to every `Logger` call when a span is active —
-the OpenTelemetry data-model standard for log/trace correlation.
+Each OTLP record carries its logger label as the attribute `logger`
+(``BackplaneOTel/loggerLabelKey``). With traces on as well, the plan's
+metadata provider is `OTel.makeLoggingMetadataProvider()`, so console
+lines inside a span carry `trace_id` / `span_id` / `trace_flags`. The
+OTLP records take their ids from the span context directly.
 
-### Export logs over OTLP
+To keep your own log handler and export only traces and metrics, pass
+`logsEnabled: false` and set `plan.logHandlerFactory` yourself, adding
+`plan.loggerMetadataProvider = OTel.makeLoggingMetadataProvider()` for
+trace ids in log lines.
 
-Passing `logsEnabled: true` puts the OTLP log handler in the plan's
-`logHandlerFactory`. The coordinator wraps it in `LevelTableLogHandler`
-like any other handler, so `--log-rule`, `logging.rules` and runtime
-`LogLevelTable.set(_:)` apply to OTLP records, and swift-otel's own
-`logs.level` no longer filters. Each OTLP record carries its logger label
-as the `logger` attribute (`BackplaneOTel.loggerLabelKey`).
-
-To keep console output beside OTLP, pass `localLogs:`. Its handlers
-receive every message the OTLP handler receives, behind the same level
-table:
-
-```swift
-try BackplaneOTel.makeBootstrap(
-    serviceName: App.identifier,
-    tracing: tracing,
-    metrics: metrics,
-    logsEnabled: true,
-    localLogs: BackplaneLogging.cloudRunOrStream.asFactory
-)
-```
-
-With logs and traces both on, the plan's `loggerMetadataProvider` is
-`OTel.makeLoggingMetadataProvider()`. It reaches the local handlers
-only: an OTLP record takes its trace and span ids from the span context.
-If logging was already bootstrapped (for example by `bootstrapLogging` in
-`main()`), the plan's logging is skipped, and its tracer and metrics
-factory are still installed.
+An endpoint set through the options or `configure:` is used as-is. For
+OTLP/HTTP, give the signal's full URL
+(`http://127.0.0.1:4318/v1/traces`); left unset, swift-otel's default
+`http://localhost:4318` gets the `/v1/<signal>` path appended.
 
 ## Pre-flight checks
 
