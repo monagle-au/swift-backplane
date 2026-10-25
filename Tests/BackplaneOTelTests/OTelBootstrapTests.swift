@@ -8,6 +8,8 @@
 import Configuration
 import Backplane
 @testable import BackplaneOTel
+import Logging
+import Synchronization
 import Testing
 
 /// Build an in-memory `ConfigReader` from a flat `[String: String]`
@@ -101,6 +103,72 @@ struct OTelBootstrapTests {
         let config = await makeConfig(["tracing.endpoint": "config:4317"])
         let merged = opts.merging(from: config.scoped(to: "tracing"))
         #expect(merged.endpoint == "cli:4317")
+    }
+}
+
+@Suite("BackplaneOTel.makeBootstrap installs nothing", .serialized)
+struct OTelBootstrapPlanTests {
+
+    final class Calls: Sendable {
+        private let entries = Mutex<[String]>([])
+        func record(_ entry: String) { entries.withLock { $0.append(entry) } }
+        var snapshot: [String] { entries.withLock { $0 } }
+    }
+
+    final class FactoryBox: Sendable {
+        private let factory = Mutex<LogHandlerFactory?>(nil)
+        func set(_ newValue: @escaping LogHandlerFactory) { factory.withLock { $0 = newValue } }
+        func make(_ label: String) -> (any LogHandler)? { factory.withLock { $0 }?(label) }
+    }
+
+    static func allOn(environment: [String: String] = [:]) throws -> BootstrapPlan {
+        try BackplaneOTel.makeBootstrap(
+            serviceName: "test-svc",
+            tracing: try OTelTracingOptions.parse(["--trace"]),
+            metrics: try OTelMetricsOptions.parse(["--metrics"]),
+            logsEnabled: true,
+            configure: noExport,
+            environment: environment
+        )
+    }
+
+    @Test("The plan carries the tracer, metrics factory and log factory, and no global is touched")
+    func planCarriesBackends() throws {
+        let plan = try Self.allOn()
+        #expect(plan.instrument != nil)
+        #expect(plan.metricsFactory != nil)
+        #expect(plan.logHandlerFactory != nil)
+        #expect(plan.loggerMetadataProvider != nil)
+        #expect(plan.lifecycleServices.map(\.label) == ["otel"])
+        #expect(BootstrapCoordinator.shared.hasBootstrappedLogging == false)
+        #expect(BootstrapCoordinator.shared.hasBootstrappedMetrics == false)
+        #expect(BootstrapCoordinator.shared.hasBootstrappedTracing == false)
+    }
+
+    @Test("After bootstrapLogging, an OTel-logs plan installs tracing and metrics and skips logging")
+    func priorLoggingInstallsOnce() throws {
+        let calls = Calls()
+        let coordinator = BootstrapCoordinator(
+            installInstrument: { _ in calls.record("instrument") },
+            installMetrics: { _ in calls.record("metrics") },
+            installLogging: { _, _, _ in calls.record("logging") }
+        )
+        var first = BootstrapPlan()
+        first.logHandlerFactory = { _ in RecordingHandler(LogSink()) }
+        first.levelTable = LogLevelTable()
+        coordinator.apply(first)
+        var second = try Self.allOn()
+        second.levelTable = LogLevelTable()
+        coordinator.apply(second)
+        #expect(calls.snapshot == ["logging", "instrument", "metrics"])
+    }
+
+    @Test("OTEL_SDK_DISABLED=true returns an empty plan")
+    func sdkDisabled() throws {
+        #expect(try Self.allOn(environment: ["OTEL_SDK_DISABLED": "TRUE"]).isEmpty)
+        #expect(BackplaneOTel.isSDKDisabled(["OTEL_SDK_DISABLED": " true "]))
+        #expect(!BackplaneOTel.isSDKDisabled(["OTEL_SDK_DISABLED": "false"]))
+        #expect(!BackplaneOTel.isSDKDisabled([:]))
     }
 }
 
