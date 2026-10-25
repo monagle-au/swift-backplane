@@ -9,9 +9,9 @@ OpenTelemetry has three subsystems: traces, metrics, and logs.
 `swift-otel` provides `LoggingSystem` / `MetricsSystem` /
 `InstrumentationSystem` backends for all three plus a
 single-`Service` lifecycle that owns the export loops. Backplane's
-``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:)``
+``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:localLogs:)``
 turns CLI flags + an optional configuration closure into a
-`BootstrapPlan` ready to install.
+`BootstrapPlan` ready to apply. It installs nothing itself.
 
 ## Enable the trait
 
@@ -58,17 +58,19 @@ struct Serve: PersistentCommand {
 }
 ```
 
-`makeBootstrap` calls `OTel.bootstrap(configuration:)`
-synchronously, which installs every enabled subsystem on its
-respective global. It then marks `BootstrapCoordinator` as
-having bootstrapped those subsystems so a downstream
-`BackplaneCommand.run()` doesn't try to install them a second
-time.
+`makeBootstrap` installs nothing. It builds swift-otel's backends and
+returns them in the plan (`instrument`, `metricsFactory` and, with logs
+on, `logHandlerFactory`), and `BackplaneCommand.run()` hands the plan to
+`BootstrapCoordinator`, which installs each subsystem exactly once. An
+app that does not use `BackplaneCommand` applies the plan itself with
+`BootstrapCoordinator.shared.apply(plan)` and runs
+`plan.lifecycleServices` in its own `ServiceGroup`.
 
-The returned plan carries a single
-`LifecycleService` — swift-otel's `OTel` runs as a regular
-service inside the framework's `ServiceGroup`, draining export
-queues until graceful shutdown.
+The returned plan carries a single `LifecycleService`, labelled `otel`,
+whose `ServiceGroup` runs the export loops of every enabled backend
+until graceful shutdown. A caller that copies only `lifecycleServices`
+into another plan gets the export loops but loses the tracer and
+metrics factory, so nothing is recorded.
 
 ## Run the service
 
@@ -132,17 +134,13 @@ explicitly passed.
 
 ## Combine with a different log handler
 
-Passing `logsEnabled: true` bypasses the level table: swift-otel
-bootstraps `LoggingSystem` itself, so log rules and runtime `set` have
-no effect.
-
-By default `makeBootstrap(logsEnabled: false)` leaves the logging
-subsystem alone — you'll typically combine OTel tracing/metrics
+With `logsEnabled: false` (the default), `makeBootstrap` leaves the
+logging subsystem alone, so you can combine OTel tracing and metrics
 with `StructuredLogHandler` (vendor-neutral JSON), `GCPLogHandler`
 (`BackplaneGCP`), or `StreamLogHandler` (text).
 
-To get trace IDs into log lines without OTel taking over the
-whole logger, use `OTel.makeLoggingMetadataProvider()`:
+To get trace IDs into log lines without exporting logs over OTLP, set
+the plan's metadata provider from `OTel.makeLoggingMetadataProvider()`:
 
 ```swift
 import OTel
@@ -170,6 +168,36 @@ The metadata provider attaches `trace_id` / `span_id` /
 `trace_flags` keys to every `Logger` call when a span is active —
 the OpenTelemetry data-model standard for log/trace correlation.
 
+### Export logs over OTLP
+
+Passing `logsEnabled: true` puts the OTLP log handler in the plan's
+`logHandlerFactory`. The coordinator wraps it in `LevelTableLogHandler`
+like any other handler, so `--log-rule`, `logging.rules` and runtime
+`LogLevelTable.set(_:)` apply to OTLP records, and swift-otel's own
+`logs.level` no longer filters. Each OTLP record carries its logger label
+as the `logger` attribute (`BackplaneOTel.loggerLabelKey`).
+
+To keep console output beside OTLP, pass `localLogs:`. Its handlers
+receive every message the OTLP handler receives, behind the same level
+table:
+
+```swift
+try BackplaneOTel.makeBootstrap(
+    serviceName: App.identifier,
+    tracing: tracing,
+    metrics: metrics,
+    logsEnabled: true,
+    localLogs: BackplaneLogging.cloudRunOrStream.asFactory
+)
+```
+
+With logs and traces both on, the plan's `loggerMetadataProvider` is
+`OTel.makeLoggingMetadataProvider()`. It reaches the local handlers
+only: an OTLP record takes its trace and span ids from the span context.
+If logging was already bootstrapped (for example by `bootstrapLogging` in
+`main()`), the plan's logging is skipped, and its tracer and metrics
+factory are still installed.
+
 ## Pre-flight checks
 
 A common debug step: enable OTel diagnostic logging to see what
@@ -191,7 +219,7 @@ func bootstrap(config: ConfigReader, environment: Environment) throws -> Bootstr
 
 The `configure:` closure is the last-mile escape hatch: the
 helper applies CLI flags first, then runs your closure on the
-resulting `OTel.Configuration` before bootstrapping. Use it for
+resulting `OTel.Configuration` before building the backends. Use it for
 mTLS paths, custom headers, resource attributes, sampling, or
 batch tuning.
 

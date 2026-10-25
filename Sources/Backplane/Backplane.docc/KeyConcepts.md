@@ -273,9 +273,11 @@ A ``BootstrapPlan`` can also carry pre-built ``LifecycleService``
 values — services that aren't declared as graph entries but must
 run alongside them. The OTel exporter
 (`BackplaneOTel.makeBootstrap(...)`) is the canonical example:
-swift-otel returns a single `Service` that owns the export loop;
-Backplane prepends it to the `ServiceGroup` ahead of graph
-entries so telemetry flows from the very first span.
+it returns a plan whose single `otel` service owns the export loops
+and whose backends the coordinator installs; Backplane prepends the
+service to the `ServiceGroup` ahead of graph entries so telemetry
+flows from the very first span. A plan copied without its
+`lifecycleServices` loses that export loop.
 
 ## Observability
 

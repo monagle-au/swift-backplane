@@ -138,8 +138,10 @@ public final class LogLevelTable: Sendable {
     /// An admin flow can check this before offering to change levels:
     /// when it is `false`, rules and ``set(_:)`` take no effect. It is
     /// `false` when logging was bootstrapped directly through
-    /// `LoggingSystem.bootstrap`, or by swift-otel when OTel logs are
-    /// enabled, rather than through ``BootstrapCoordinator``.
+    /// `LoggingSystem.bootstrap` rather than through ``BootstrapCoordinator``,
+    /// and, after a coordinator bootstrap, until the first logger is built.
+    /// OTel logs (`BackplaneOTel.makeBootstrap(logsEnabled: true)`) go
+    /// through the coordinator and consult the table.
     public var isConsulted: Bool {
         consulted.load(ordering: .relaxed)
     }

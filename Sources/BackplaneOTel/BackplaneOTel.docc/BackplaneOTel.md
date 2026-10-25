@@ -8,16 +8,19 @@ OpenTelemetry integration for Backplane via
 `BackplaneOTel` is opt-in: enable the `OTel` package trait to bring
 `swift-otel` into the dependency graph. The target adds:
 
-- A bootstrap factory ``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:)``
-  that wraps `swift-otel`'s `OTel.bootstrap(...)` and returns a
+- A bootstrap factory ``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:localLogs:)``
+  that builds `swift-otel`'s backends and returns them in a
   `BootstrapPlan` ready to feed into
-  `BackplaneCommand.bootstrap(config:environment:)`.
+  `BackplaneCommand.bootstrap(config:environment:)`. It installs
+  nothing itself.
 - Opinionated CLI option groups (``OTelTracingOptions``,
   ``OTelMetricsOptions``) covering the most-used OTel knobs.
-- Coordination with `BootstrapCoordinator` so swift-otel's
-  internal one-shot installs of `LoggingSystem` /
-  `MetricsSystem` / `InstrumentationSystem` don't conflict with
-  any other bootstrap path.
+- Coordination with `BootstrapCoordinator`: the plan carries the
+  tracer, metrics factory and log handler factory, and the
+  coordinator installs each of `InstrumentationSystem` /
+  `MetricsSystem` / `LoggingSystem` once, so OTel never conflicts
+  with another bootstrap path. OTLP logs go through the runtime
+  level table.
 
 ## Topics
 
@@ -28,7 +31,7 @@ OpenTelemetry integration for Backplane via
 ### Bootstrap
 
 - ``BackplaneOTel``
-- ``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:)``
+- ``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:localLogs:)``
 
 ### CLI option groups
 

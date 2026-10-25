@@ -14,7 +14,7 @@ import ServiceLifecycle
 extension BackplaneOTel {
 
     /// Build a `BootstrapPlan` that carries swift-otel's backends for
-    /// ``BootstrapCoordinator`` to install.
+    /// `BootstrapCoordinator` to install.
     ///
     /// **This function installs nothing.** It builds each enabled backend with
     /// `OTel.makeTracingBackend`, `OTel.makeMetricsBackend` and
