@@ -24,6 +24,11 @@ from `1.0.0` onwards.
   loops in one `LifecycleService` labelled `otel`. The coordinator installs
   each at most once, so `bootstrapLogging` followed by an OTel-logs plan
   installs tracing and metrics and skips logging instead of crashing.
+- **Concurrent logging no longer crashes on Linux.** `StructuredLogHandler`
+  (and so `GCPLogHandler`) and `CloudTraceExporter` shared one
+  `ISO8601DateFormatter`, which swift-corelibs-foundation does not make safe
+  across threads (signal 11 in CI). Both use the `Sendable`
+  `Date.ISO8601FormatStyle`; timestamps are unchanged (UTC, milliseconds, `Z`).
 
 ### Added
 
