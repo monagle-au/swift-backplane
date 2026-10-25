@@ -140,6 +140,8 @@ struct OTelBootstrapPlanTests {
         #expect(plan.logHandlerFactory != nil)
         #expect(plan.loggerMetadataProvider != nil)
         #expect(plan.lifecycleServices.map(\.label) == ["otel"])
+        // Deliberate process-global tripwire: reading `shared.hasBootstrapped*`
+        // proves makeBootstrap installed nothing (no other test may apply to `shared`).
         #expect(BootstrapCoordinator.shared.hasBootstrappedLogging == false)
         #expect(BootstrapCoordinator.shared.hasBootstrappedMetrics == false)
         #expect(BootstrapCoordinator.shared.hasBootstrappedTracing == false)

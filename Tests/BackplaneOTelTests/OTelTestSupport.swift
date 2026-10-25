@@ -64,6 +64,9 @@ struct RecordingHandler: LogHandler {
 }
 
 /// Every exporter off, so building a backend opens nothing.
+///
+/// The OTel suites assume a clean `OTEL_*` environment: swift-otel's
+/// `make*Backend` reads `ProcessInfo` itself, beyond what these tests inject.
 @Sendable func noExport(_ config: inout OTel.Configuration) {
     config.traces.exporter = .none
     config.metrics.exporter = .none
