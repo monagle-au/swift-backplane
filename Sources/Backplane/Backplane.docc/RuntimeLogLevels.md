@@ -70,11 +70,12 @@ coordinator logs one warning per entry of
 - If logging was already bootstrapped, the whole plan's logging
   configuration is skipped, rules and warnings included. Two cases
   follow:
-  - **OTel logs enabled.** swift-otel bootstraps `LoggingSystem`
-    itself, so no ``LevelTableLogHandler`` is in use. The table is not
-    consulted at all: rules and runtime `set` do nothing.
-    ``LogLevelTable/isConsulted`` is `false` in this case, so an admin
-    flow can tell before offering a change.
+  - **OTel logs enabled.** Since 2.4.0, `BackplaneOTel.makeBootstrap`
+    installs nothing itself: its OTLP log handler is the plan's
+    ``BootstrapPlan/logHandlerFactory``, so the coordinator wraps it in
+    ``LevelTableLogHandler`` and rules apply to OTLP records too. If
+    logging was already bootstrapped, that plan's logging is skipped like
+    any other, and its tracer and metrics factory are still installed.
   - **`main()` calls `bootstrapLogging` first.** That call goes through
     `apply`, so the table is installed with that call's base level and
     no rules. The command's later plan is skipped, so its `--log-rule`
@@ -118,6 +119,13 @@ hook receives the already-wrapped factory (its level argument is
 informational only). A custom hook must not set
 `handler.logLevel = level`: that creates a per-instance floor which
 stops rules lowering the level.
+
+A plan's ``BootstrapPlan/loggerMetadataProvider`` is assigned to the
+outermost handler, which forwards it to the handler it wraps. For a
+`MultiplexLogHandler`, that is every child that supports providers, and
+it replaces any provider a child's factory set. BackplaneOTel's OTLP
+handler ignores it: an OTLP record takes its trace and span ids from the
+span context.
 
 ### Cost
 

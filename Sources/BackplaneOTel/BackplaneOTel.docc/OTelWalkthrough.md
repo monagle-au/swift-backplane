@@ -1,6 +1,6 @@
 # OpenTelemetry Walkthrough
 
-Wire OpenTelemetry tracing and metrics into a Backplane
+Wire OpenTelemetry tracing, metrics and logs into a Backplane
 application using `swift-otel`.
 
 ## Overview
@@ -9,9 +9,9 @@ OpenTelemetry has three subsystems: traces, metrics, and logs.
 `swift-otel` provides `LoggingSystem` / `MetricsSystem` /
 `InstrumentationSystem` backends for all three plus a
 single-`Service` lifecycle that owns the export loops. Backplane's
-``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:)``
+``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:localLogs:)``
 turns CLI flags + an optional configuration closure into a
-`BootstrapPlan` ready to install.
+`BootstrapPlan` ready to apply. It installs nothing itself.
 
 ## Enable the trait
 
@@ -58,24 +58,27 @@ struct Serve: PersistentCommand {
 }
 ```
 
-`makeBootstrap` calls `OTel.bootstrap(configuration:)`
-synchronously, which installs every enabled subsystem on its
-respective global. It then marks `BootstrapCoordinator` as
-having bootstrapped those subsystems so a downstream
-`BackplaneCommand.run()` doesn't try to install them a second
-time.
+`makeBootstrap` installs nothing. It builds swift-otel's backends and
+returns them in the plan (`instrument`, `metricsFactory` and, with logs
+on, `logHandlerFactory`), and `BackplaneCommand.run()` hands the plan to
+`BootstrapCoordinator`, which installs each subsystem exactly once. An
+app that does not use `BackplaneCommand` applies the plan itself with
+`BootstrapCoordinator.shared.apply(plan)` and runs
+each entry of `plan.lifecycleServices` (its `service`) in its own
+`ServiceGroup`.
 
-The returned plan carries a single
-`LifecycleService` — swift-otel's `OTel` runs as a regular
-service inside the framework's `ServiceGroup`, draining export
-queues until graceful shutdown.
+The returned plan carries a single `LifecycleService`, labelled `otel`,
+whose `ServiceGroup` runs the export loops of every enabled backend
+until graceful shutdown. A caller that copies only `lifecycleServices`
+into another plan gets the export loops but loses the tracer and
+metrics factory, so nothing is recorded.
 
 ## Run the service
 
 ```bash
 swift run my-app serve \
-    --trace --otel-endpoint=otel-collector:4317 \
-    --metrics --otel-metrics-endpoint=otel-collector:4317
+    --trace --otel-endpoint=http://otel-collector:4318/v1/traces \
+    --metrics --otel-metrics-endpoint=http://otel-collector:4318/v1/metrics
 ```
 
 (The service name isn't a flag on these option groups — it's
@@ -86,7 +89,7 @@ defaults. Useful for production:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com:4317
-OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc  # gRPC, so port 4317
 OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production
 ```
 
@@ -120,55 +123,55 @@ Operators can now drive the same fields via env vars:
 
 ```bash
 TRACING_ENABLED=true
-TRACING_ENDPOINT=otel-collector:4317
+TRACING_ENDPOINT=http://otel-collector:4318/v1/traces
 TRACING_SAMPLE_RATE=0.1
 METRICS_ENABLED=true
-METRICS_ENDPOINT=otel-collector:4318
+METRICS_ENDPOINT=http://otel-collector:4318/v1/metrics
 ```
 
 …or via a `.env` file, secret-manager-backed provider, or
 anything else `ConfigReader` supports. CLI flags still win when
 explicitly passed.
 
-## Combine with a different log handler
+## Logs over OTLP, with console output and runtime levels
 
-Passing `logsEnabled: true` bypasses the level table: swift-otel
-bootstraps `LoggingSystem` itself, so log rules and runtime `set` have
-no effect.
-
-By default `makeBootstrap(logsEnabled: false)` leaves the logging
-subsystem alone — you'll typically combine OTel tracing/metrics
-with `StructuredLogHandler` (vendor-neutral JSON), `GCPLogHandler`
-(`BackplaneGCP`), or `StreamLogHandler` (text).
-
-To get trace IDs into log lines without OTel taking over the
-whole logger, use `OTel.makeLoggingMetadataProvider()`:
+With `logsEnabled: true`, OTLP log records go through the level table
+like any other handler. Pass `localLogs` to keep console output too.
+Both legs sit behind one `LevelTableLogHandler`, so `--log-rule`,
+`logging.rules` and runtime `set` change what reaches both:
 
 ```swift
-import OTel
-
 func bootstrap(config: ConfigReader, environment: Environment) throws -> BootstrapPlan {
     var plan = try BackplaneOTel.makeBootstrap(
         serviceName: App.identifier,
         tracing: tracing,
         metrics: metrics,
-        logsEnabled: false
+        logsEnabled: true,
+        localLogs: BackplaneLogging.stream   // after `configure:` when both are given
     )
-
-    plan.logHandlerFactory = BackplaneLogging.cloudRunOrStream.asFactory
     let merged = logging.merging(from: config.scoped(to: "logging"))
     plan.logLevel = merged.resolvedLogLevel
     plan.logRules = merged.resolvedLogRules
     plan.rejectedLogRules = merged.rejectedLogRules
-    plan.loggerMetadataProvider = OTel.makeLoggingMetadataProvider()
-
     return plan
 }
 ```
 
-The metadata provider attaches `trace_id` / `span_id` /
-`trace_flags` keys to every `Logger` call when a span is active —
-the OpenTelemetry data-model standard for log/trace correlation.
+Each OTLP record carries its logger label as the attribute `logger`
+(``BackplaneOTel/loggerLabelKey``). With traces on as well, the plan's
+metadata provider is `OTel.makeLoggingMetadataProvider()`, so console
+lines inside a span carry `trace_id` / `span_id` / `trace_flags`. The
+OTLP records take their ids from the span context directly.
+
+To keep your own log handler and export only traces and metrics, pass
+`logsEnabled: false` and set `plan.logHandlerFactory` yourself, adding
+`plan.loggerMetadataProvider = OTel.makeLoggingMetadataProvider()` for
+trace ids in log lines.
+
+An endpoint set through the options or `configure:` is used as-is. For
+OTLP/HTTP, give the signal's full URL
+(`http://127.0.0.1:4318/v1/traces`); left unset, swift-otel's default
+`http://localhost:4318` gets the `/v1/<signal>` path appended.
 
 ## Pre-flight checks
 
@@ -191,7 +194,7 @@ func bootstrap(config: ConfigReader, environment: Environment) throws -> Bootstr
 
 The `configure:` closure is the last-mile escape hatch: the
 helper applies CLI flags first, then runs your closure on the
-resulting `OTel.Configuration` before bootstrapping. Use it for
+resulting `OTel.Configuration` before building the backends. Use it for
 mTLS paths, custom headers, resource attributes, sampling, or
 batch tuning.
 
@@ -211,8 +214,8 @@ A minimal `otel-collector.yaml`:
 receivers:
   otlp:
     protocols:
-      grpc:
-        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
 
 exporters:
   debug:
@@ -229,7 +232,7 @@ service:
 ```
 
 Start the collector, then `swift run my-app serve --trace
---otel-endpoint=localhost:4317`. Spans appear in the collector's
+--otel-endpoint=http://localhost:4318/v1/traces`. Spans appear in the collector's
 stdout, easy to inspect.
 
 ## Sampling

@@ -213,14 +213,12 @@ public actor CloudTraceExporter {
 
     /// RFC 3339 with millisecond precision — accepted by Cloud Trace v2.
     private func rfc3339(_ date: Date) -> String {
-        Self.timestampFormatter.string(from: date)
+        Self.timestampFormatter.format(date)
     }
 
-    nonisolated(unsafe) private static let timestampFormatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
+    /// `Sendable`, unlike `ISO8601DateFormatter`, which is not safe to share
+    /// across threads on Linux.
+    private static let timestampFormatter = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 }
 
 #endif

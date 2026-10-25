@@ -204,7 +204,7 @@ public struct StructuredLogHandler: LogHandler {
             severityKey: profile.severityKey,
             severityValue: profile.severityFormatter(level),
             timeKey: profile.timeKey,
-            timeValue: Self.iso8601.string(from: Date()),
+            timeValue: Self.iso8601.format(Date()),
             loggerKey: profile.loggerKey,
             loggerValue: label,
             messageKey: profile.messageKey,
@@ -293,14 +293,10 @@ public struct StructuredLogHandler: LogHandler {
     /// ISO 8601 with millisecond precision and explicit Z. Sorts cleanly
     /// as a string — handy when diffing log lines.
     ///
-    /// `nonisolated(unsafe)` is correct here: `ISO8601DateFormatter` is
-    /// documented thread-safe for `string(from:)` once its
-    /// `formatOptions` are set.
-    nonisolated(unsafe) private static let iso8601: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
+    /// A `Sendable` value, so every concurrent `log` call can share it. A
+    /// shared `ISO8601DateFormatter` is not safe on Linux: concurrent
+    /// `string(from:)` calls crash inside swift-corelibs-foundation.
+    private static let iso8601 = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 
     nonisolated(unsafe) private static let encoder: JSONEncoder = {
         let e = JSONEncoder()
