@@ -8,6 +8,48 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+### Changed
+
+- **`BackplaneOTel.makeBootstrap` installs nothing until the plan is
+  applied. This is a behaviour change for direct callers.** It used to call
+  `OTel.bootstrap`, which installed `InstrumentationSystem`, `MetricsSystem`
+  and `LoggingSystem` as a side effect. It now builds the backends with
+  `OTel.makeTracingBackend`, `makeMetricsBackend` and `makeLoggingBackend`
+  and returns them in the plan (`instrument`, `metricsFactory`,
+  `logHandlerFactory`), with the export loops in one `otel`
+  `LifecycleService`. Apply the plan through `BackplaneCommand.run()` or
+  `BootstrapCoordinator.shared.apply(_:)`. A caller that copies only
+  `lifecycleServices` into another plan loses tracing and metrics: copy the
+  whole plan, or its `instrument`, `metricsFactory` and `logHandlerFactory`
+  too. A plan applied after logging was already bootstrapped installs
+  tracing and metrics and skips logging.
+- **OTel logs now go through the level table.** The OTLP handler is installed
+  like any other `logHandlerFactory`, so the coordinator wraps it in
+  `LevelTableLogHandler`: `--log-rule`, `logging.rules` and runtime
+  `LogLevelTable.set(_:)` apply to OTLP records, and
+  `LogLevelTable.isConsulted` is `true` once a logger is built. swift-otel's
+  own `logs.level` / `OTEL_SWIFT_LOG_LEVEL` no longer filter; the table
+  decides.
+- `makeBootstrap` gains a final `localLogs:` parameter (after `configure:`,
+  so a trailing closure still binds to `configure`). Its handlers receive every
+  message the OTLP handler receives, multiplexed behind the one level table.
+  The signature is now
+  `makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:localLogs:)`.
+
+### Added
+
+- `BackplaneOTel.loggerLabelKey` (`"logger"`): each OTLP log record carries its
+  swift-log label under this attribute, unless the message sets its own.
+- With logs and traces both on, the plan's `loggerMetadataProvider` is
+  `OTel.makeLoggingMetadataProvider()`. It reaches the `localLogs` handlers;
+  the OTLP handler ignores it and takes ids from the span context.
+
+### Fixed
+
+- `LogLevelTable.isConsulted` documentation: it is `false` after a direct
+  `LoggingSystem.bootstrap`, and after a coordinator bootstrap until the first
+  logger is built; it is no longer `false` for OTel logs.
+
 ## [2.3.0] — 2026-10-19
 
 ### Added
