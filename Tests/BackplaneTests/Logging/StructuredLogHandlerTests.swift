@@ -49,6 +49,33 @@ struct StructuredLogHandlerPlainTests {
         #expect(time.hasSuffix("Z"))
     }
 
+    @Test("time is UTC RFC 3339 with milliseconds, e.g. 2026-05-05T07:05:15.123Z")
+    func timeFormat() throws {
+        let sink = CapturedSink()
+        let (_, logger) = makeHandler(sink: sink)
+        logger.info("Hello")
+        let time = try #require(try parse(sink.snapshot[0])["time"] as? String)
+        #expect(time.wholeMatch(of: /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/) != nil, "\(time)")
+    }
+
+    // A guard, not a reproduction: the shared-`ISO8601DateFormatter` crash this
+    // replaced was seen on x86_64 Linux CI but never reproduced on arm64.
+    @Test("concurrent log calls each get a well-formed timestamp")
+    func concurrentTimestamps() async throws {
+        let sink = CapturedSink()
+        let (_, logger) = makeHandler(sink: sink)
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<500 {
+                group.addTask { logger.info("concurrent-\(i)") }
+            }
+        }
+        #expect(sink.snapshot.count == 500)
+        for line in sink.snapshot {
+            let time = try #require(try parse(line)["time"] as? String)
+            #expect(time.wholeMatch(of: /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/) != nil, "\(time)")
+        }
+    }
+
     @Test("plain profile uses 'source' (not the GCP key) for source location")
     func sourceLocationKey() throws {
         let sink = CapturedSink()
