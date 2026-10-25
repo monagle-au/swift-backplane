@@ -46,6 +46,14 @@ extension BackplaneOTel {
     ///     option groups are applied (endpoints, protocol, headers, mTLS,
     ///     batch sizes). An endpoint set here is used as-is: for OTLP/HTTP
     ///     give the full `/v1/<signal>` URL.
+    ///   - localLogs: With `logsEnabled`, a factory whose handlers receive
+    ///     every message the OTLP handler receives (for example console
+    ///     output), multiplexed behind the same level table. It comes after
+    ///     `configure` so a trailing closure still means `configure`. Each
+    ///     OTLP record carries its logger label as ``loggerLabelKey``. With
+    ///     logs and traces both on, the plan's `loggerMetadataProvider` is
+    ///     `OTel.makeLoggingMetadataProvider()`. It reaches the local handlers
+    ///     only; the OTLP record takes its ids from the span context.
     /// - Returns: An empty plan when every subsystem is off, or when
     ///   `OTEL_SDK_DISABLED` is `true`.
     public static func makeBootstrap(
@@ -53,7 +61,8 @@ extension BackplaneOTel {
         tracing: OTelTracingOptions = OTelTracingOptions(),
         metrics: OTelMetricsOptions = OTelMetricsOptions(),
         logsEnabled: Bool = false,
-        configure: (@Sendable (inout OTel.Configuration) -> Void)? = nil
+        configure: (@Sendable (inout OTel.Configuration) -> Void)? = nil,
+        localLogs: LogHandlerFactory? = nil
     ) throws -> BootstrapPlan {
         try makeBootstrap(
             serviceName: serviceName,
@@ -61,16 +70,19 @@ extension BackplaneOTel {
             metrics: metrics,
             logsEnabled: logsEnabled,
             configure: configure,
+            localLogs: localLogs,
             environment: ProcessInfo.processInfo.environment
         )
     }
 
+    // `environment` governs only the OTEL_SDK_DISABLED guard: swift-otel's make*Backend reads ProcessInfo itself.
     static func makeBootstrap(
         serviceName: String,
         tracing: OTelTracingOptions,
         metrics: OTelMetricsOptions,
         logsEnabled: Bool,
         configure: (@Sendable (inout OTel.Configuration) -> Void)?,
+        localLogs: LogHandlerFactory? = nil,
         environment: [String: String]
     ) throws -> BootstrapPlan {
         var config = OTel.Configuration.default
@@ -119,7 +131,7 @@ extension BackplaneOTel {
         }
         if config.logs.enabled {
             let backend = try OTel.makeLoggingBackend(configuration: config)
-            plan.logHandlerFactory = backend.factory
+            plan.logHandlerFactory = logHandlerFactory(otel: backend.factory, localLogs: localLogs)
             if config.traces.enabled {
                 plan.loggerMetadataProvider = OTel.makeLoggingMetadataProvider()
             }

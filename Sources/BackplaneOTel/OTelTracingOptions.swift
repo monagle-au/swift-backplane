@@ -13,7 +13,7 @@ import Configuration
 /// More OTel-specific than the vendor-neutral `TracingOptions` in core
 /// Backplane — these flags map directly onto fields of
 /// `OTel.Configuration.TracesConfiguration` and are consumed by
-/// ``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:)``.
+/// ``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:localLogs:)``.
 ///
 /// Compose into a `BackplaneCommand`:
 ///
@@ -76,7 +76,7 @@ public struct OTelTracingOptions: ParsableArguments, Sendable {
     /// swift-otel itself also reads OpenTelemetry-spec environment
     /// variables (`OTEL_EXPORTER_OTLP_ENDPOINT`,
     /// `OTEL_TRACES_SAMPLER_ARG`, …) when
-    /// ``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:)``
+    /// ``BackplaneOTel/makeBootstrap(serviceName:tracing:metrics:logsEnabled:configure:localLogs:)``
     /// applies environment overrides, so OTel-standard env vars
     /// continue to work alongside this Backplane-style config.
     public func merging(from config: ConfigReader) -> OTelTracingOptions {

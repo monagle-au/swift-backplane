@@ -170,6 +170,123 @@ struct OTelBootstrapPlanTests {
         #expect(!BackplaneOTel.isSDKDisabled(["OTEL_SDK_DISABLED": "false"]))
         #expect(!BackplaneOTel.isSDKDisabled([:]))
     }
+
+    @Test("The plan's log factory stamps the logger label (an OTelRecordLogHandler)")
+    func planFactoryStampsLabel() throws {
+        let plan = try Self.allOn()
+        let factory = try #require(plan.logHandlerFactory)
+        #expect(factory("acumen.engine") is OTelRecordLogHandler)
+    }
+
+    @Test("The coordinator wraps the OTLP factory in the level table, with local logs multiplexed")
+    func coordinatorWrapsInTable() throws {
+        let box = FactoryBox()
+        let coordinator = BootstrapCoordinator(
+            installInstrument: { _ in },
+            installMetrics: { _ in },
+            installLogging: { factory, _, _ in box.set(factory) }
+        )
+        var plan = try BackplaneOTel.makeBootstrap(
+            serviceName: "test-svc",
+            tracing: try OTelTracingOptions.parse([]),
+            metrics: try OTelMetricsOptions.parse([]),
+            logsEnabled: true,
+            configure: noExport,
+            localLogs: { _ in RecordingHandler(LogSink()) }
+        )
+        plan.levelTable = LogLevelTable()
+        coordinator.apply(plan)
+        let handler = try #require(box.make("acumen.engine") as? LevelTableLogHandler)
+        #expect(handler.wrapped is MultiplexLogHandler)
+    }
+
+    @Test("With logs off, logging stays the caller's and local logs are ignored")
+    func logsOffLeavesLogging() throws {
+        let plan = try BackplaneOTel.makeBootstrap(
+            serviceName: "test-svc",
+            tracing: try OTelTracingOptions.parse(["--trace"]),
+            metrics: try OTelMetricsOptions.parse([]),
+            logsEnabled: false,
+            configure: noExport,
+            localLogs: { _ in RecordingHandler(LogSink()) }
+        )
+        #expect(plan.instrument != nil)
+        #expect(plan.logHandlerFactory == nil)
+        #expect(plan.loggerMetadataProvider == nil)
+        #expect(plan.hasLoggingConfiguration == false)
+    }
+
+    @Test("A trailing closure still binds to configure")
+    func trailingClosureIsConfigure() throws {
+        let plan = try BackplaneOTel.makeBootstrap(
+            serviceName: "test-svc",
+            tracing: try OTelTracingOptions.parse([]),
+            metrics: try OTelMetricsOptions.parse([]),
+            logsEnabled: true
+        ) { config in
+            noExport(&config)
+        }
+        #expect(plan.logHandlerFactory != nil)
+    }
+
+    @Test("An all-on plan applied on a coordinator installs the level table over the OTLP leg")
+    func allOnInstallsTableOverOTLP() throws {
+        let box = FactoryBox()
+        let coordinator = BootstrapCoordinator(
+            installInstrument: { _ in },
+            installMetrics: { _ in },
+            installLogging: { factory, _, _ in box.set(factory) }
+        )
+        var plan = try Self.allOn()
+        plan.levelTable = LogLevelTable()
+        coordinator.apply(plan)
+        let handler = try #require(box.make("acumen.engine") as? LevelTableLogHandler)
+        #expect(handler.wrapped is OTelRecordLogHandler)
+    }
+
+    @Test("A metadata provider set on the installed handler stops at the OTLP leg")
+    func installedProviderStopsAtOTLP() throws {
+        let box = FactoryBox()
+        let coordinator = BootstrapCoordinator(
+            installInstrument: { _ in },
+            installMetrics: { _ in },
+            installLogging: { factory, _, _ in box.set(factory) }
+        )
+        let console = LogSink()
+        var plan = try BackplaneOTel.makeBootstrap(
+            serviceName: "test-svc",
+            tracing: try OTelTracingOptions.parse(["--trace"]),
+            metrics: try OTelMetricsOptions.parse([]),
+            logsEnabled: true,
+            configure: noExport,
+            localLogs: { _ in RecordingHandler(console) },
+            environment: [:]
+        )
+        plan.levelTable = LogLevelTable()
+        coordinator.apply(plan)
+        let provider = try #require(plan.loggerMetadataProvider)
+
+        // With local logs: the console leg takes the provider.
+        var withConsole = try #require(box.make("acumen.engine"))
+        withConsole.metadataProvider = provider
+        #expect(console.providerAssignmentCount == 1)
+
+        // Without: the table wraps the OTLP leg directly, which keeps none.
+        let otlpBox = FactoryBox()
+        let otlpCoordinator = BootstrapCoordinator(
+            installInstrument: { _ in },
+            installMetrics: { _ in },
+            installLogging: { factory, _, _ in otlpBox.set(factory) }
+        )
+        var otlpPlan = try Self.allOn()
+        otlpPlan.levelTable = LogLevelTable()
+        otlpCoordinator.apply(otlpPlan)
+        var installed = try #require(otlpBox.make("acumen.engine") as? LevelTableLogHandler)
+        installed.metadataProvider = provider
+        let leg = try #require(installed.wrapped as? OTelRecordLogHandler)
+        #expect(leg.metadataProvider == nil)
+        #expect(installed.metadataProvider == nil)
+    }
 }
 
 #endif
