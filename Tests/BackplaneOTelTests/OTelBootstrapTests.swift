@@ -225,8 +225,11 @@ struct OTelBootstrapPlanTests {
             logsEnabled: true
         ) { config in
             noExport(&config)
+            config.metrics.enabled = true
         }
         #expect(plan.logHandlerFactory != nil)
+        // The metrics options are parsed off, so only the closure enabled metrics.
+        #expect(plan.metricsFactory != nil)
     }
 
     @Test("An all-on plan applied on a coordinator installs the level table over the OTLP leg")
@@ -283,8 +286,8 @@ struct OTelBootstrapPlanTests {
         otlpCoordinator.apply(otlpPlan)
         var installed = try #require(otlpBox.make("acumen.engine") as? LevelTableLogHandler)
         installed.metadataProvider = provider
-        let leg = try #require(installed.wrapped as? OTelRecordLogHandler)
-        #expect(leg.metadataProvider == nil)
+        // The cast is the assertion: the table wraps the OTLP leg directly.
+        _ = try #require(installed.wrapped as? OTelRecordLogHandler)
         #expect(installed.metadataProvider == nil)
     }
 }
