@@ -68,6 +68,10 @@ package struct ServiceGraphEntryAdapter: ServiceLifecycle.Service {
             )
             throw error
         }
+        // From here to `gracefulShutdown()` there must be no return:
+        // ``ServiceGraph/run()`` documents that once every entry is
+        // `.running` it returns only on shutdown or cancellation, and
+        // consumers rely on `.running` meaning "still supervised".
         entry.transition(to: .running)
         logger?.debug("Adapter: '\(entry.descriptor.id)' is .running")
 

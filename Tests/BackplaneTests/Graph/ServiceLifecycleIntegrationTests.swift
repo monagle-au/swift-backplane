@@ -180,6 +180,67 @@ struct ServiceLifecycleIntegrationTests {
                 "entry should land in a terminal state after cancellation; got \(finalState)")
     }
 
+    // MARK: Test 2b — run() does not return on its own once entries run
+
+    /// The contract on ``ServiceGraph/run()``: once every adapted entry is
+    /// `.running`, `run()` returns only after graceful shutdown. Consumers
+    /// rely on it (acumen registers the graph with
+    /// `successTerminationBehavior: .gracefullyShutdownGroup`, so a graph
+    /// that finished on its own would shut the whole process down), and
+    /// check `.running` instead of waiting to see whether `run()` returns.
+    ///
+    /// A test can't prove that something never happens, so this one
+    /// checks the points where the contract would show: at the moment
+    /// every entry is `.running`, `run()` hasn't returned and nothing has
+    /// been drained, and when it does return, the shutdown was triggered
+    /// first. The services' `start()` returns at once and leaves nothing
+    /// running, so the adapter alone keeps each slot open.
+    @Test("Once every entry is .running, run() returns only after graceful shutdown")
+    func testRunDoesNotReturnWhileEntriesRun() async throws {
+        let keyA = ServiceKey<RecordingService>(id: "a")
+        let keyB = ServiceKey<RecordingService>(id: "b")
+        let graph = try ServiceGraph(descriptors: [
+            EntryDescriptor(keyA, subgroup: .integrations) { _ in RecordingService() },
+            EntryDescriptor(keyB, subgroup: .integrations) { _ in RecordingService() },
+        ])
+
+        // The outer group gives the graph the same success behaviour
+        // acumen does, so a graph returning early would end the group.
+        let outer = ServiceGroup(configuration: ServiceGroupConfiguration(
+            services: [.init(
+                service: graph,
+                successTerminationBehavior: .gracefullyShutdownGroup
+            )],
+            gracefulShutdownSignals: [],
+            cancellationSignals: [],
+            logger: Logger(label: "test-outer-contract")
+        ))
+
+        let shutdownTriggered = Mutex(false)
+        let returnedBeforeShutdown = Mutex<Bool?>(nil)
+        let runTask = Task {
+            try await outer.run()
+            returnedBeforeShutdown.withLock { $0 = !shutdownTriggered.withLock { $0 } }
+        }
+
+        try await waitFor(keyA.id, in: graph) { $0 == .running }
+        try await waitFor(keyB.id, in: graph) { $0 == .running }
+
+        #expect(returnedBeforeShutdown.withLock { $0 } == nil,
+                "run() must not have returned while its entries are running")
+        #expect(graph.state(of: keyA.id) == .running)
+        #expect(graph.state(of: keyB.id) == .running)
+
+        shutdownTriggered.withLock { $0 = true }
+        await outer.triggerGracefulShutdown()
+        try await runTask.value
+
+        #expect(returnedBeforeShutdown.withLock { $0 } == false,
+                "run() returned before graceful shutdown was triggered")
+        #expect(graph.state(of: keyA.id) == .stopped)
+        #expect(graph.state(of: keyB.id) == .stopped)
+    }
+
     // MARK: Test 3 — requireService works while the graph is in run()
 
     /// Cross-service resolution composes with the SL.Service envelope.

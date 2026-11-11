@@ -8,6 +8,15 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+### Documentation
+
+- **When `ServiceGraph.run()` can return.** Once every adapted entry is
+  `.running`, `run()` returns only after graceful shutdown or
+  cancellation; an adapter can return on its own only before its entry
+  reaches `.running`. This is now documented on `run()`, marked in the
+  adapter, and pinned by a test, so consumers can check `.running`
+  instead of waiting to see whether `run()` returns.
+
 ## [2.4.0] — 2026-10-25
 
 ### Fixed
