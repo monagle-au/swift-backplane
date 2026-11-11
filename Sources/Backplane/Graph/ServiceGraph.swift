@@ -1324,6 +1324,19 @@ extension ServiceGraph: ServiceLifecycle.Service {
     /// propagates the signal to every adapter. `run()` returns once
     /// the inner group's `run()` returns.
     ///
+    /// **When `run()` can return.** Once every adapted entry has reached
+    /// ``ServiceState/running``, `run()` returns only after graceful
+    /// shutdown or cancellation. An adapter can return on its own only
+    /// before its entry reaches `.running` (its `start()` threw, it was
+    /// cancelled during `start()`, or phase 1 left it no instance); after
+    /// that it waits in `gracefulShutdown()`. A caller that registers the
+    /// graph with `successTerminationBehavior: .gracefullyShutdownGroup`
+    /// can rely on this: the graph does not finish on its own while its
+    /// entries are running. A caller that needs to know the graph is
+    /// still supervising can check that its entries are `.running`; there
+    /// is no need to wait and see whether `run()` returns.
+    /// `ServiceLifecycleIntegrationTests` pins this.
+    ///
     /// **Termination behaviours per adapter.** `failFast` subgroups map
     /// to `failureTerminationBehavior: .gracefullyShutdownGroup` —
     /// a failure cascades to draining the whole graph. `degraded`
