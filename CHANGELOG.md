@@ -8,6 +8,21 @@ from `1.0.0` onwards.
 
 ## [Unreleased]
 
+### Added
+
+- **`ConfigStore` over an injectable `ConfigPersistence`.**
+  `ConfigStore(persistence:scope:encryption:environmentProvider:)` keeps
+  its document somewhere other than a local JSON file: a database, a
+  secrets manager, or a remote owner. A persistence loads and saves the
+  whole document as flat dotted keys of `ConfigEntry` (a `ConfigScalar`
+  plus an explicit `isSecret` flag). Secrets are still encrypted with the
+  store's `ConfigEncryption` before they reach the persistence; pass
+  `.passthrough` when the persistence encrypts at rest itself. Every
+  write saves before memory changes, so a failed save changes nothing a
+  reader can see, and a store's saves are serialised. `reload()` loads
+  the document again. The file-backed and in-memory stores are
+  unchanged.
+
 ### Documentation
 
 - **When `ServiceGraph.run()` can return.** Once every adapted entry is

@@ -77,6 +77,9 @@ that use no other part of this package.
 
 ### Persistence and locking
 
+- ``ConfigPersistence``
+- ``ConfigEntry``
+- ``ConfigScalar``
 - ``ConfigWriter``
 - ``ConfigWriterError``
 - ``FileLock``
