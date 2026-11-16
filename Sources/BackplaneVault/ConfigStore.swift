@@ -106,6 +106,41 @@ public struct ConfigStore: Sendable {
         self.scopePrefix = []
     }
 
+    /// Create a config store whose document lives in `persistence` instead of a
+    /// local JSON file: a database, a secrets manager, or a remote owner.
+    ///
+    /// The document is loaded once here; call ``reload()`` to load it again.
+    /// Every write saves the whole document through `persistence` **before** the
+    /// in-memory state changes, so a write that throws changes nothing a reader
+    /// can see. Writes from this store (and its scoped stores) are serialised;
+    /// nothing is merged with other writers — see ``ConfigPersistence``.
+    ///
+    /// Secrets are encrypted with `encryption` before they reach `persistence`,
+    /// exactly as the file-backed store does, and are flagged with
+    /// ``ConfigEntry/isSecret``. Pass `.passthrough` when the persistence
+    /// encrypts at rest itself.
+    ///
+    /// - Parameters:
+    ///   - persistence: Where the document is loaded from and saved to.
+    ///   - scope: The configuration scope (used as prefix for env var lookups).
+    ///   - encryption: The encryption implementation for secret encryption/decryption.
+    ///   - environmentProvider: Optional env var provider for override support.
+    ///     Pass `nil` to disable env var override (useful for testing).
+    public init(
+        persistence: any ConfigPersistence,
+        scope: String,
+        encryption: any ConfigEncryption,
+        environmentProvider: (any ConfigProvider)? = EnvironmentVariablesProvider()
+    ) async throws {
+        self.backend = try await ConfigStoreBackend(
+            persistence: persistence,
+            scope: scope,
+            encryption: encryption,
+            environmentProvider: environmentProvider
+        )
+        self.scopePrefix = []
+    }
+
     /// Create a config store with an explicit backend and scope prefix (for scoping).
     private init(backend: ConfigStoreBackend, scopePrefix: [String]) {
         self.backend = backend
@@ -201,7 +236,8 @@ public struct ConfigStore: Sendable {
 
     // MARK: - Reload
 
-    /// Re-read the JSON file from disk.
+    /// Re-read the JSON file from disk, or load the document again from the
+    /// store's ``ConfigPersistence``.
     ///
     /// Call this after external modifications to the config file (manual edits,
     /// CLI commands, etc.) to pick up the changes in the in-memory provider.
@@ -248,7 +284,8 @@ public struct ConfigStore: Sendable {
 
     // MARK: - Info
 
-    /// The file path of the backing JSON file.
+    /// The file path of the backing JSON file. Empty for an in-memory store and
+    /// for a store backed by a ``ConfigPersistence``.
     public var filePath: String { backend.filePath }
 
     // MARK: - Private
@@ -300,6 +337,20 @@ public actor ConfigStoreBackend {
     /// visibility but can never destroy another writer's keys.
     private var currentValues: [String: Any]
 
+    /// Where the document lives when it isn't a file. `nil` for the
+    /// file-backed and in-memory stores.
+    private let persistence: (any ConfigPersistence)?
+
+    /// The document as last loaded from or saved to ``persistence``, with each
+    /// key's secret flag. Empty when there is no persistence.
+    private var persistedEntries: [String: ConfigEntry] = [:]
+
+    /// Serialises persistence loads and saves, so each save is built from the
+    /// document the previous one left (actor isolation alone does not hold
+    /// across the `await`).
+    private var persistenceBusy = false
+    private var persistenceWaiters: [CheckedContinuation<Void, Never>] = []
+
     // MARK: - Init (file-backed)
 
     init(
@@ -311,6 +362,7 @@ public actor ConfigStoreBackend {
         self.filePath = filePath
         self.scope = scope
         self.encryption = encryption
+        self.persistence = nil
 
         // Load existing JSON file (empty dict if missing)
         let values = try ConfigWriter.read(filePath: filePath)
@@ -344,6 +396,7 @@ public actor ConfigStoreBackend {
         self.filePath = ""
         self.scope = ""
         self.encryption = encryption
+        self.persistence = nil
         self.currentValues = inMemoryValues
 
         var initial: [AbsoluteConfigKey: ConfigValue] = [:]
@@ -358,6 +411,40 @@ public actor ConfigStoreBackend {
         // Wrap with DecryptingConfigProvider for consistency with file-backed init
         let decrypting = DecryptingConfigProvider(upstream: mutable, encryption: encryption)
         self.reader = ConfigReader(provider: decrypting)
+    }
+
+    // MARK: - Init (persistence-backed)
+
+    init(
+        persistence: any ConfigPersistence,
+        scope: String,
+        encryption: any ConfigEncryption,
+        environmentProvider: (any ConfigProvider)?
+    ) async throws {
+        self.filePath = ""
+        self.scope = scope
+        self.encryption = encryption
+        self.persistence = persistence
+
+        let entries = try await persistence.load()
+        self.persistedEntries = entries
+        self.currentValues = entries.mapValues { Self.jsonValue($0.value) }
+
+        var initial: [AbsoluteConfigKey: ConfigValue] = [:]
+        for (key, entry) in entries {
+            initial[Self.absoluteKey(scope: scope, key: key)] =
+                ConfigValue(Self.content(entry.value), isSecret: entry.isSecret)
+        }
+
+        let mutable = MutableInMemoryProvider(name: "config-store[\(scope)]", initialValues: initial)
+        self.mutableProvider = mutable
+
+        let decrypting = DecryptingConfigProvider(upstream: mutable, encryption: encryption)
+        if let envProvider = environmentProvider {
+            self.reader = ConfigReader(providers: [envProvider, decrypting]).scoped(to: ConfigKey(scope))
+        } else {
+            self.reader = ConfigReader(provider: decrypting).scoped(to: ConfigKey(scope))
+        }
     }
 
     // MARK: - Write Operations
@@ -394,6 +481,18 @@ public actor ConfigStoreBackend {
         default: String(describing: content)
         }
 
+        if let persistence {
+            await acquirePersistence()
+            defer { releasePersistence() }
+            var next = persistedEntries
+            next[key] = ConfigEntry(value: Self.scalar(content), isSecret: isSecret)
+            try await persistence.save(next)  // throws before memory changes
+            persistedEntries = next
+            currentValues[key] = jsonValue
+            mutableProvider.setValue(ConfigValue(content, isSecret: isSecret), forKey: absKey)
+            return
+        }
+
         guard !filePath.isEmpty else {
             // In-memory only (testing) — no file, no lock.
             mutableProvider.setValue(ConfigValue(content, isSecret: isSecret), forKey: absKey)
@@ -422,6 +521,18 @@ public actor ConfigStoreBackend {
     func removeValue(forKey key: String) async throws {
         let absKey = Self.absoluteKey(scope: scope, key: key)
 
+        if let persistence {
+            await acquirePersistence()
+            defer { releasePersistence() }
+            var next = persistedEntries
+            next[key] = nil
+            try await persistence.save(next)  // throws before memory changes
+            persistedEntries = next
+            currentValues.removeValue(forKey: key)
+            mutableProvider.setValue(nil, forKey: absKey)
+            return
+        }
+
         guard !filePath.isEmpty else {
             mutableProvider.setValue(nil, forKey: absKey)
             currentValues.removeValue(forKey: key)
@@ -443,6 +554,14 @@ public actor ConfigStoreBackend {
     /// Held under the same ``FileLock`` as writes so a reload can never
     /// observe (or race) a concurrent read-merge-write from another store.
     func reload() async throws {
+        if let persistence {
+            await acquirePersistence()
+            defer { releasePersistence() }
+            let entries = try await persistence.load()
+            replacePersisted(with: entries)
+            return
+        }
+
         guard !filePath.isEmpty else { return }
 
         let newValues: [String: Any]
@@ -471,6 +590,73 @@ public actor ConfigStoreBackend {
             mutableProvider.setValue(configValue, forKey: Self.absoluteKey(scope: scope, key: key))
         }
         currentValues = newValues
+    }
+
+    // MARK: - Persistence
+
+    /// Wait until no other persistence load or save is in flight, then hold
+    /// the turn until ``releasePersistence()``.
+    private func acquirePersistence() async {
+        guard persistenceBusy else {
+            persistenceBusy = true
+            return
+        }
+        // Ownership is handed straight to the resumed waiter, so the flag
+        // stays set across the hand-over.
+        await withCheckedContinuation { persistenceWaiters.append($0) }
+    }
+
+    private func releasePersistence() {
+        if persistenceWaiters.isEmpty {
+            persistenceBusy = false
+        } else {
+            persistenceWaiters.removeFirst().resume()
+        }
+    }
+
+    /// Replace in-memory state with a document loaded from the persistence,
+    /// taking each key's secrecy from its flag (never from ciphertext
+    /// detection, which can't see a plaintext secret under `.passthrough`).
+    private func replacePersisted(with entries: [String: ConfigEntry]) {
+        for key in persistedEntries.keys where entries[key] == nil {
+            mutableProvider.setValue(nil, forKey: Self.absoluteKey(scope: scope, key: key))
+        }
+        for (key, entry) in entries {
+            mutableProvider.setValue(
+                ConfigValue(Self.content(entry.value), isSecret: entry.isSecret),
+                forKey: Self.absoluteKey(scope: scope, key: key)
+            )
+        }
+        persistedEntries = entries
+        currentValues = entries.mapValues { Self.jsonValue($0.value) }
+    }
+
+    private static func scalar(_ content: ConfigContent) -> ConfigScalar {
+        switch content {
+        case .string(let s): .string(s)
+        case .int(let i): .int(i)
+        case .double(let d): .double(d)
+        case .bool(let b): .bool(b)
+        default: .string(String(describing: content))
+        }
+    }
+
+    private static func content(_ scalar: ConfigScalar) -> ConfigContent {
+        switch scalar {
+        case .string(let s): .string(s)
+        case .int(let i): .int(i)
+        case .double(let d): .double(d)
+        case .bool(let b): .bool(b)
+        }
+    }
+
+    private static func jsonValue(_ scalar: ConfigScalar) -> Any {
+        switch scalar {
+        case .string(let s): s
+        case .int(let i): i
+        case .double(let d): d
+        case .bool(let b): b
+        }
     }
 
     // MARK: - Private
